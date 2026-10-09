@@ -1263,7 +1263,7 @@ impl FilmcraftApp {
                     .iter()
                     .chain(filmcraft_media::AUDIO_EXTENSIONS)
                     .chain(filmcraft_media::STILL_EXTENSIONS)
-                    .chain(&["srt", "vtt", "scc", "edl", "xml", "fcpxml", "otio", "aaf", "omf"])
+                    .chain(&["srt", "vtt", "scc", "edl", "xml", "fcpxml", "otio", "aaf", "omf", "prproj"])
                     .copied()
                     .collect();
                 let bin = params.get("bin").cloned();
@@ -1278,6 +1278,19 @@ impl FilmcraftApp {
                         && !errs.is_empty()
                     {
                         app.ui.status = errs.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("; ");
+                    } else if let Ok(v) = &r {
+                        let messages: Vec<&str> = v
+                            .get("documents")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|d| d.get("report").and_then(Value::as_array))
+                            .flatten()
+                            .filter_map(Value::as_str)
+                            .collect();
+                        if !messages.is_empty() {
+                            app.ui.status = format!("Import report: {}", messages.iter().take(3).copied().collect::<Vec<_>>().join("; "));
+                        }
                     }
                     r
                 })
