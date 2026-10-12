@@ -63,6 +63,32 @@ fn keyframe_exists(it: &TrackItem, k: &KeyframeRef) -> bool {
     param.is_some_and(|p| p.keyframes.iter().any(|kf| kf.time == k.time))
 }
 
+/// Edit ▸ Select All with Effect Controls focused selects every keyframe of the clips it shows,
+/// as Premiere's does, instead of every clip in the Timeline (#1241). `false` when it shows no clip.
+pub(crate) fn select_all_keyframes(app: &mut FilmcraftApp) -> bool {
+    let clips = selected_clips(app);
+    if clips.is_empty() {
+        return false;
+    }
+    let mut keys = Vec::new();
+    for (clip, it, _) in &clips {
+        for (effect, e) in it.effects.iter().enumerate() {
+            let key = |param: &str, mask: Option<usize>, time: Tick| KeyframeRef { clip: clip.0, effect, param: param.into(), mask, time };
+            for (param, p) in &e.params {
+                keys.extend(p.keyframes.iter().map(|kf| key(param, None, kf.time)));
+            }
+            for (m, mask) in e.masks.iter().enumerate() {
+                for param in filmcraft_project::mask::MASK_PARAMS {
+                    let Some(p) = mask.param(param) else { continue };
+                    keys.extend(p.keyframes.iter().map(|kf| key(param, Some(m), kf.time)));
+                }
+            }
+        }
+    }
+    app.ui.keyframe_selection = keys;
+    true
+}
+
 fn selected_clip(app: &FilmcraftApp) -> Option<(ClipId, TrackItem, TrackKind)> {
     selected_clips(app).into_iter().next()
 }
