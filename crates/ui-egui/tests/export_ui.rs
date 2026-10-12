@@ -88,6 +88,12 @@ impl Driver {
         v.as_array().unwrap().iter().any(|e| e["id"] == json!(id))
     }
 
+    fn label(&mut self, id: &str) -> String {
+        let v = self.ok("ui.elements", json!({"prefix": id}));
+        let e = v.as_array().unwrap().iter().find(|e| e["id"] == json!(id)).unwrap_or_else(|| panic!("no element {id}")).clone();
+        e["label"].as_str().unwrap_or_default().to_string()
+    }
+
     fn app(&mut self) -> &mut FilmcraftApp {
         self.harness.state_mut()
     }
@@ -177,6 +183,51 @@ fn export_mode_settings_and_summary() {
     assert!(d.app().ui.export.settings.effects.loudness.enabled);
     assert!(d.has("export.effects.loudness.target"));
     d.snapshot("export-mode");
+}
+
+/// The Aspect drop-down says what the file gets. An anamorphic sequence (720x480 with 32:27
+/// pixels) at Match Source keeps its pixels, so the drop-down names the sequence's ratio, as the
+/// Summary does (it read "Square Pixels (1.0)"); a square-pixel sequence and a chosen frame size
+/// get square pixels as before.
+#[test]
+fn the_aspect_drop_down_names_the_pixel_aspect_the_file_gets() {
+    use filmcraft_engine::project::{ItemId, ItemKind};
+    let mut d = Driver::new("aspect");
+    d.ok("ui.set", json!({"mode": "export"}));
+    d.frames(4);
+    // the demo sequence has square pixels
+    assert_eq!(d.label("export.video.aspect"), "Square Pixels (1.0)");
+    // a 720x480 Color Matte given 32:27 pixels, and the sequence New Sequence From Clip makes of it
+    let r = d.exec("file.newColorMatte", json!({"color": "#3366ff", "width": 720, "height": 480, "seconds": 2.0}));
+    let item = ItemId(r["item"].as_u64().unwrap());
+    if let Some(ItemKind::Media(m)) = std::sync::Arc::make_mut(&mut d.app().session.project).item_mut(item).map(|i| &mut i.kind) {
+        m.info.video.as_mut().unwrap().par = (32, 27);
+    }
+    d.exec("file.newSequenceFromClip", json!({"items": [item.0]}));
+    d.ok("ui.set", json!({"mode": "export"}));
+    d.frames(4);
+    let q = d.app().session.active_sequence().unwrap().settings.clone();
+    assert_eq!((q.width, q.height, q.par), (720, 480, (32, 27)));
+    assert_eq!(d.app().ui.export.settings.pixel_aspect, None);
+    assert_eq!(d.label("export.video.aspect"), "Match Source (1.19)");
+    assert!(d.label("export.summary").contains("720x480 (1.19)"), "{}", d.label("export.summary"));
+    // the open list names that entry the same, and the ratios keep their names
+    d.click("export.video.aspect");
+    assert_eq!(d.label("export.video.aspect.option.0"), "Match Source (1.19)");
+    assert_eq!(d.label("export.video.aspect.option.1"), "D1/DV NTSC (0.9091)");
+    // a ratio chosen there is shown by its name, and the first entry gives the sequence's back
+    d.click("export.video.aspect.option.1");
+    assert_eq!(d.app().ui.export.settings.pixel_aspect, Some((10, 11)));
+    assert_eq!(d.label("export.video.aspect"), "D1/DV NTSC (0.9091)");
+    d.click("export.video.aspect");
+    d.click("export.video.aspect.option.0");
+    assert_eq!(d.app().ui.export.settings.pixel_aspect, None);
+    assert_eq!(d.label("export.video.aspect"), "Match Source (1.19)");
+    // a chosen frame size: the picture is fitted into square pixels
+    d.ok("ui.set", json!({"export": {"preset": "High Quality 1080p HD"}}));
+    d.frames(3);
+    assert_eq!(d.label("export.video.aspect"), "Square Pixels (1.0)");
+    assert!(d.label("export.summary").contains("1920x1080 (1.0)"), "{}", d.label("export.summary"));
 }
 
 #[test]
