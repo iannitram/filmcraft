@@ -2919,6 +2919,7 @@
 	Audio Format	Formato de áudio
 	Uncompressed (PCM)	Sem compressão (PCM)
 	Match Source ({seq_sr} Hz)	Igual à origem ({seq_sr} Hz)
+	Match Source ({par})	Igual à origem ({par})
 	Channels	Canais
 	Audio Bitrate	Taxa de bits do áudio
 	Sample Size	Tamanho da amostra
