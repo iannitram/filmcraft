@@ -2,22 +2,22 @@
 
 ## Review cursor
 
-First code review done 2026-10-12 (run cut short by a 05:00 UTC hard stop; 4 of 8 selected PRs not reached). Next run: review 429, 1201, 1076, 884 first (not reviewed last time), then re-check 408/409/495/629 only if their head commit changed.
+Second code review run done 2026-10-12 (finished within budget, ~15 min used). Reviewed the 4 PRs the first run didn't reach (429, 1076, 884 are ready; 1201 needs a rebase). 408/409/495/629 unchanged since the first run, carried forward without re-review. Next run: re-check any of the 8 whose head commit changed; if all 8 are unchanged, there's nothing to re-review — consider scanning the wider open-PR list again for new WISHLIST-area matches (checked once this run, nothing beat the current 8).
 
 ## Open threads
 
-| PR | Title | Verdict (2026-10-12) | Head commit reviewed |
+| PR | Title | Verdict (2026-10-12, 2nd review) | Head commit reviewed |
 |---|---|---|---|
-| 408 | VA-API hardware decoding + H.264/H.265 export encoding | needs work (test robustness bug + conflicts) | 41aa5b0cb9612e8d9baadb710670907d1a02852b |
-| 409 | AV1 export format, VA-API on Linux | needs work (inherits 408's bug + conflicts; duplicates 408) | 39909bc6973cc8cd031beb23dcf72ca44a2e5534 |
-| 495 | Premiere FX & Projects (.prproj importer) | needs work (rebase only; code itself looks solid) | 006807e35816e7631ed6dccc1e64e7b61a82acd7 |
-| 629 | H.264 High 10 / 4:2:2 decode, bit-exact | needs work (unexplained eac3_oracle test failure; see Needs Ian) | 8641e7d6cf5afa7913d2faf3bf6d5bb5a4eda1e2 |
-| 429 | Real-world media round-trip corpus manifest | not reviewed: out of time | b505987ffb4b394ac437e8b4b67f6bfefd6412f9 |
-| 1201 | M7: rendering capabilities / fallback diagnostics | not reviewed: out of time | 70193ecb6fc145d15c1c8707d7eaa2d3f1fc87ca |
-| 1076 | #1039: HEVC multi-threaded picture decode | not reviewed: out of time | 2098f2a426f5f49b890dad5ca7b4c78dae7b27e4 |
-| 884 | h264: safe-SIMD weighted pred/chroma/IDCT (#848) | not reviewed: out of time | 5351d9e1762c923e63115bd4ee4783b4e062c488 |
+| 408 | VA-API hardware decoding + H.264/H.265 export encoding | needs work (test robustness bug + conflicts) — carried forward, not re-reviewed | 41aa5b0cb9612e8d9baadb710670907d1a02852b |
+| 409 | AV1 export format, VA-API on Linux | needs work (inherits 408's bug + conflicts; duplicates 408) — carried forward, not re-reviewed | 39909bc6973cc8cd031beb23dcf72ca44a2e5534 |
+| 495 | Premiere FX & Projects (.prproj importer) | needs work (rebase only; code itself looks solid) — carried forward, not re-reviewed | 006807e35816e7631ed6dccc1e64e7b61a82acd7 |
+| 629 | H.264 High 10 / 4:2:2 decode, bit-exact | needs work (unexplained eac3_oracle test failure; see Needs Ian) — carried forward, not re-reviewed | 8641e7d6cf5afa7913d2faf3bf6d5bb5a4eda1e2 |
+| 429 | Real-world media round-trip corpus manifest | **ready** | b505987ffb4b394ac437e8b4b67f6bfefd6412f9 |
+| 1201 | M7: rendering capabilities / fallback diagnostics | needs work (rebase: conflicts in export/lib.rs, hardware_encode.rs, several i18n .tsv, ui-egui/lib.rs; code itself careful and well-tested) | 70193ecb6fc145d15c1c8707d7eaa2d3f1fc87ca |
+| 1076 | #1039: HEVC multi-threaded picture decode | **ready** | 2098f2a426f5f49b890dad5ca7b4c78dae7b27e4 |
+| 884 | h264: safe-SIMD weighted pred/chroma/IDCT (#848) | **ready** | 5351d9e1762c923e63115bd4ee4783b4e062c488 |
 
-Full findings: `nightly/2026-10-12.md` → Code review section.
+Full findings: `nightly/2026-10-12.md` → Code review and Code review (second run) sections.
 
 ## Bug-fix pass cursor
 
