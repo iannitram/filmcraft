@@ -30,6 +30,7 @@ Full findings: `nightly/2026-10-12.md` → Code review and Code review (second r
 ## Optimization pass cursor
 
 2026-10-12: SD H.264 decode, deblocking filter. Two bit-exact attempts (per-MB transpose of vertical edges; 64-bit word-swap transpose), both within noise, nothing kept. Don't retry deblock transposes. Next target in rotation: **H.264 export path incl. SD->1080p scaling with pixel-aspect correction** (CPU scaler / colour conversion / h264enc), then seek / scrub latency on long-GOP MP4. Skip anything `upstream PR` 883 / 884 (H.264 MC/IDCT SIMD) or 1076 (HEVC threads) cover.
+2026-10-12 (second run): H.264 export encoder: SATD (8/4-wide) + fixed-width MC rows, −8.9%, kept (PR 6). Don't redo SATD 16-wide in plain Rust (already near its limit). Next target in rotation: **seek / scrub latency on long-GOP MP4**, then the SD->1080p scaler (CPU) and h264enc transform/quant (26% of encode). Open thread: `threads = 1` in h264enc still uses the global rayon pool (all cores), relevant to `upstream issue` 1216.
 ## Bug-fix cursor (third run)
 
 2026-10-12: fixed 1241 (PR 4). Skipped because upstream PRs cover them: 1158, 1191, 1163, 1183, 1184, 1187, 1188, 1189, 1190. Skipped as features or too vague: 1176, 1205, 1117, 1186. Skipped as OS-specific: 1235, 1234, 1157, 1134, 1229, 1212. Next run: start from issues newer than 1243, or recheck 1205 if it gets steps to reproduce.
@@ -50,3 +51,4 @@ Full findings: `nightly/2026-10-12.md` → Code review and Code review (second r
 | `fix/upstream-1088-shutter-blur-frame-edges` | Transform shutter GPU-path fix (`upstream issue 1088`), second run | Merged into fork main 2026-10-12 (PR 2 = fix, PR 3 = extra GPU-plan test). Not yet upstream, so the nightly fast-forward sync will skip until upstream has it or main is merged instead |
 | `fix/upstream-1241-select-all-keyframes` | Cmd/Ctrl+A in Effect Controls selects keyframes, not Timeline clips (`upstream issue` 1241) | Merged into fork main 2026-10-12 (PR 4, merge commit a6e27e7). Not yet upstream; upstream candidate |
 | `fix/upstream-1249-apv-oracle-old-ffmpeg` | APV oracle tests skip instead of failing when ffmpeg < 8.0 (`upstream issue` 1249) | PR 5 open on the fork, ready to merge; upstream candidate |
+| `perf/h264enc-satd-mc` | h264enc: faster narrow-block SATD + fixed-width MC rows, −8.9% encode, byte-identical (cloud CPU) | PR 6 open on the fork, 2026-10-12; upstream candidate |
