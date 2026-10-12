@@ -99,6 +99,7 @@ impl FxEnv for ItemEnv<'_> {
             t: self.item.effect_time_at(t2),
             px_scale: img.w as f32 / src.0.max(1) as f32,
             seconds: (t2 - self.item.start).seconds(),
+            frame_rate: self.seq.settings.frame_rate.as_f64(),
             timecode: self.tc,
             clip_name: &self.item.name,
             project: Some(self.project),
