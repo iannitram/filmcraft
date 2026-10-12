@@ -2922,6 +2922,7 @@
 	Audio Format	Format Audio
 	Uncompressed (PCM)	Tanpa Kompresi (PCM)
 	Match Source ({seq_sr} Hz)	Cocokkan Sumber ({seq_sr} Hz)
+	Match Source ({par})	Cocokkan Sumber ({par})
 	Channels	Kanal
 	Audio Bitrate	Bitrate Audio
 	Sample Size	Ukuran Sampel

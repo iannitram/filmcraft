@@ -2906,6 +2906,7 @@
 	Audio Format	オーディオ形式
 	Uncompressed (PCM)	非圧縮 (PCM)
 	Match Source ({seq_sr} Hz)	ソースに合わせる ({seq_sr} Hz)
+	Match Source ({par})	ソースに合わせる ({par})
 	Channels	チャンネル
 	Audio Bitrate	オーディオビットレート
 	Sample Size	サンプルサイズ
