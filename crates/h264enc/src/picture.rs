@@ -208,18 +208,31 @@ impl RefPic {
         let stride = a.stride;
         let ia = a.idx(xi + dxa as isize, yi + dya as isize);
         if pa == pb && dxa == dxb && dya == dyb {
-            for r in 0..h {
-                out[r * ostride..r * ostride + w].copy_from_slice(&a.data[ia + r * stride..ia + r * stride + w]);
+            // fixed-width rows become a few vector moves instead of a `memcpy` call per row
+            match w {
+                16 => copy_rows::<16>(&a.data[ia..], stride, out, ostride, h),
+                8 => copy_rows::<8>(&a.data[ia..], stride, out, ostride, h),
+                _ => {
+                    for r in 0..h {
+                        out[r * ostride..r * ostride + w].copy_from_slice(&a.data[ia + r * stride..ia + r * stride + w]);
+                    }
+                }
             }
         } else {
             let b = self.plane(pb);
             let ib = b.idx(xi + dxb as isize, yi + dyb as isize);
-            for r in 0..h {
-                let ra = &a.data[ia + r * stride..ia + r * stride + w];
-                let rb = &b.data[ib + r * stride..ib + r * stride + w];
-                let o = &mut out[r * ostride..r * ostride + w];
-                for i in 0..w {
-                    o[i] = ((ra[i] as u16 + rb[i] as u16 + 1) >> 1) as u8;
+            match w {
+                16 => avg_rows::<16>(&a.data[ia..], &b.data[ib..], stride, out, ostride, h),
+                8 => avg_rows::<8>(&a.data[ia..], &b.data[ib..], stride, out, ostride, h),
+                _ => {
+                    for r in 0..h {
+                        let ra = &a.data[ia + r * stride..ia + r * stride + w];
+                        let rb = &b.data[ib + r * stride..ib + r * stride + w];
+                        let o = &mut out[r * ostride..r * ostride + w];
+                        for i in 0..w {
+                            o[i] = ((ra[i] as u16 + rb[i] as u16 + 1) >> 1) as u8;
+                        }
+                    }
                 }
             }
         }
@@ -238,14 +251,66 @@ impl RefPic {
         for (p, out) in [(&self.frame.u, out_u), (&self.frame.v, out_v)] {
             let s = p.stride;
             let i0 = p.idx(xi, yi);
-            for r in 0..h {
-                let a = &p.data[i0 + r * s..i0 + r * s + w + 1];
-                let b = &p.data[i0 + (r + 1) * s..i0 + (r + 1) * s + w + 1];
-                let o = &mut out[r * ostride..r * ostride + w];
-                for i in 0..w {
-                    o[i] = ((w00 * a[i] as u32 + w01 * a[i + 1] as u32 + w10 * b[i] as u32 + w11 * b[i + 1] as u32 + 32) >> 6) as u8;
+            let wts = [w00, w01, w10, w11];
+            match w {
+                8 => chroma_rows::<8, 9>(&p.data[i0..], s, out, ostride, h, wts),
+                4 => chroma_rows::<4, 5>(&p.data[i0..], s, out, ostride, h, wts),
+                _ => {
+                    for r in 0..h {
+                        let a = &p.data[i0 + r * s..i0 + r * s + w + 1];
+                        let b = &p.data[i0 + (r + 1) * s..i0 + (r + 1) * s + w + 1];
+                        let o = &mut out[r * ostride..r * ostride + w];
+                        for i in 0..w {
+                            o[i] = ((w00 * a[i] as u32 + w01 * a[i + 1] as u32 + w10 * b[i] as u32 + w11 * b[i + 1] as u32 + 32) >> 6) as u8;
+                        }
+                    }
                 }
             }
+        }
+    }
+}
+
+/// Copy `h` rows of `W` samples (the motion-compensation fast path for the common block widths).
+#[inline(always)]
+fn copy_rows<const W: usize>(src: &[u8], ss: usize, out: &mut [u8], os: usize, h: usize) {
+    for r in 0..h {
+        let (Some(d), Some(s)) = (out.get_mut(r * os..).and_then(|x| x.first_chunk_mut::<W>()), src.get(r * ss..).and_then(|x| x.first_chunk::<W>())) else {
+            return;
+        };
+        *d = *s;
+    }
+}
+
+/// Rounded average of `h` rows of `W` samples from two planes with the same stride.
+#[inline(always)]
+fn avg_rows<const W: usize>(a: &[u8], b: &[u8], ss: usize, out: &mut [u8], os: usize, h: usize) {
+    for r in 0..h {
+        let (Some(o), Some(ra), Some(rb)) = (
+            out.get_mut(r * os..).and_then(|x| x.first_chunk_mut::<W>()),
+            a.get(r * ss..).and_then(|x| x.first_chunk::<W>()),
+            b.get(r * ss..).and_then(|x| x.first_chunk::<W>()),
+        ) else {
+            return;
+        };
+        for i in 0..W {
+            o[i] = ((ra[i] as u16 + rb[i] as u16 + 1) >> 1) as u8;
+        }
+    }
+}
+
+/// Bilinear chroma interpolation of `h` rows of `W` samples (`W1` = `W` + 1 source samples per row).
+#[inline(always)]
+fn chroma_rows<const W: usize, const W1: usize>(src: &[u8], ss: usize, out: &mut [u8], os: usize, h: usize, [w00, w01, w10, w11]: [u32; 4]) {
+    for r in 0..h {
+        let (Some(o), Some(a), Some(b)) = (
+            out.get_mut(r * os..).and_then(|x| x.first_chunk_mut::<W>()),
+            src.get(r * ss..).and_then(|x| x.first_chunk::<W1>()),
+            src.get((r + 1) * ss..).and_then(|x| x.first_chunk::<W1>()),
+        ) else {
+            return;
+        };
+        for i in 0..W {
+            o[i] = ((w00 * a[i] as u32 + w01 * a[i + 1] as u32 + w10 * b[i] as u32 + w11 * b[i + 1] as u32 + 32) >> 6) as u8;
         }
     }
 }
