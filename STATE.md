@@ -21,6 +21,16 @@ Second code review run done 2026-10-12 (finished within budget, ~15 min used). R
 
 Full findings: `nightly/2026-10-12.md` → Code review and Code review (second run) sections.
 
+**Upstream has its own PRs for three of our fixes** (checked 2026-10-12 15:55 UTC; all opened after our runs that night, all still open):
+
+| Upstream issue | Our fix on `ours` | Upstream's PR | What happens when upstream merges it |
+|---|---|---|---|
+| 1241 (Select All in Effect Controls) | fork PR 4 | `upstream PR` 1271, same approach | merging `upstream/main` into `ours` conflicts in `crates/ui-egui/src/panels/effect_controls.rs` |
+| 1249 (APV tests on old ffmpeg) | fork PR 5 | `upstream PR` 1257 and `upstream PR` 1314 | conflicts in `crates/apv/tests/oracle.rs` (and `docs/testing.md`) |
+| 1088 (Transform shutter blur) | fork PRs 2 and 3 | `upstream PR` 1287: the same `FxCtx::frame_rate` field, but it leaves the GPU frame plan alone | conflicts in 5 files under `crates/render` and `crates/gpu` |
+
+For the bug-fix pass: when the merge of `upstream/main` into `ours` conflicts in those files, that is this, and the prompt's rule holds (abort, push nothing, list the files under Needs Ian). A daytime session then drops our copy and takes upstream's. Of the shutter fix only the `gpu_chain` check in `crates/render/src/plan.rs` and its test are ours to keep. **Before starting any issue, list upstream's open PRs again**: other contributors fixed all three of these within hours.
+
 Open threads in our own code (nobody is working on these; Ian decides whether a run takes one):
 
 - `crates/h264enc`: `EncoderConfig::threads = 1` still runs on rayon's global pool, so it uses every core (found by the optimization pass; relevant to `upstream issue` 1216).
@@ -59,10 +69,10 @@ Write a claim here before starting an issue: `claimed: upstream issue <N>, <UTC 
 
 | Branch | Purpose | Status |
 |---|---|---|
-| `fix/upstream-1088-transform-shutter` | Transform shutter blur leaked into still frames / missing on GPU path (`upstream issue` 1088) | Merged into `ours` 2026-10-12 (PR 2). **Checked on a real GPU 2026-10-12** (exports with GPU rendering on and off, 60 fps, 360° shutter): upstream 0.6.0 drops the blur with the GPU on; `ours` blurs the move, keeps the frames at rest sharp, and its GPU and CPU exports match. Not yet upstream; upstream candidate |
+| `fix/upstream-1088-transform-shutter` | Transform shutter blur leaked into still frames / missing on GPU path (`upstream issue` 1088) | Merged into `ours` 2026-10-12 (PR 2). **Checked on a real GPU 2026-10-12** (exports with GPU rendering on and off, 60 fps, 360° shutter): upstream 0.6.0 drops the blur with the GPU on; `ours` blurs the move, keeps the frames at rest sharp, and its GPU and CPU exports match. **No longer an upstream candidate as it stands:** `upstream PR` 1287 covers the frame-rate half. The GPU frame plan half (`gpu_chain`, 3 lines and a test) is still only ours |
 | `fix/upstream-1088-shutter-blur-frame-edges` | The second run's duplicate of the fix above | Merged into `ours` 2026-10-12 (PR 3): its only extra is a test that the frame plan and the CPU render match. Not an upstream candidate |
-| `fix/upstream-1241-select-all-keyframes` | Cmd/Ctrl+A in Effect Controls selects keyframes, not Timeline clips (`upstream issue` 1241) | Merged into `ours` 2026-10-12 (PR 4). Not yet upstream; upstream candidate |
-| `fix/upstream-1249-apv-oracle-old-ffmpeg` | APV oracle tests skip instead of failing when ffmpeg < 8.0 (`upstream issue` 1249) | Merged into `ours` 2026-10-12 (PR 5). Not yet upstream; upstream candidate |
+| `fix/upstream-1241-select-all-keyframes` | Cmd/Ctrl+A in Effect Controls selects keyframes, not Timeline clips (`upstream issue` 1241) | Merged into `ours` 2026-10-12 (PR 4). **Not an upstream candidate any more:** `upstream PR` 1271 fixes the same issue the same way |
+| `fix/upstream-1249-apv-oracle-old-ffmpeg` | APV oracle tests skip instead of failing when ffmpeg < 8.0 (`upstream issue` 1249) | Merged into `ours` 2026-10-12 (PR 5). **Not an upstream candidate any more:** `upstream PR` 1257 and `upstream PR` 1314 cover it |
 | `perf/h264enc-satd-mc` | h264enc: faster narrow-block SATD + fixed-width MC rows, byte-identical output | Merged into `ours` 2026-10-12 (PR 6). Re-measured on a 24-thread desktop (7 alternating pairs; another build was running, so it is noisy): median encode time −9% at 1080p and −13% at 720x480, every 720x480 pair faster, output the same size to the byte. Not yet upstream; upstream candidate |
 | `fix/2026-10-12-anamorphic-export-squeezed` | Exports of anamorphic sequences came out squeezed and Match Source dropped the pixel aspect (no upstream issue) | Merged into `ours` 2026-10-12 (PR 7). Not yet upstream; upstream candidate together with the branch below |
 | `fix/2026-10-12-anamorphic-export-preview` | Follow-up to PR 7: the Export dialog's preview and Summary line showed the old squeezed shape and "1.0"; AV1 (hardware-only, like H.265) keeps a matched pixel aspect in the track only | Merged into `ours` 2026-10-12 (PR 8). Branched from `ours` (it needs PR 7) |
