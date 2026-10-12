@@ -13,6 +13,7 @@ fn cx() -> FxCtx<'static> {
         t: Tick::ZERO,
         px_scale: 1.0,
         seconds: 0.0,
+        frame_rate: 24.0,
         timecode: "01:00:00:00",
         clip_name: "clip",
         project: None,
@@ -1152,5 +1153,29 @@ mod pipeline {
         place(&mut p2, seq2, 0, ocean2, vec![echo]);
         let e = render_sequence(&p2, seq2, r.tick_of(30), RenderOptions::default(), &map2);
         assert!(e.px.iter().all(|v| v.is_finite()));
+    }
+}
+
+/// Upstream issue 1088: the Transform shutter blurred the frames just before a move starts and just
+/// after it ends, while the layer itself was still at rest there (a ghost of the move to come).
+/// The frames either side of the keyframed move must match the unblurred picture.
+#[test]
+fn transform_shutter_blur_stays_inside_the_keyframed_move() {
+    let mut e = inst("transform");
+    set(&mut e, "shutter_override", ParamValue::Bool(true));
+    setf(&mut e, "shutter_angle", 360.0);
+    let mut a = Keyframe::new(Tick::from_seconds_f64(1.0), ParamValue::Vec2(filmcraft_geom::Vec2::new(8.0, 16.0)));
+    a.interp = Interpolation::Linear;
+    let mut b = Keyframe::new(Tick::from_seconds_f64(2.0), ParamValue::Vec2(filmcraft_geom::Vec2::new(40.0, 16.0)));
+    b.interp = Interpolation::Linear;
+    e.params.insert("position".into(), Param { value: ParamValue::Vec2(filmcraft_geom::Vec2::new(8.0, 16.0)), keyframes: vec![a, b] });
+    let mut off = e.clone();
+    set(&mut off, "shutter_override", ParamValue::Bool(false));
+    let img = picture(32, 32);
+    for frame in [22, 23, 49, 50] {
+        let t = Tick::from_rational(frame, 1, 24);
+        let cx = FxCtx { t, seconds: t.seconds(), ..cx() };
+        let delta = max_diff(&run("transform", &off, &img, &cx), &run("transform", &e, &img, &cx));
+        assert!(delta < 1e-4, "frame {frame} at rest is blurred ({delta})");
     }
 }

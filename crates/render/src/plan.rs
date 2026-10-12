@@ -183,7 +183,9 @@ fn gpu_chain<'a>(project: &Project, item: &'a TrackItem, opts: RenderOptions) ->
             continue;
         }
         let masked = e.masks.iter().any(|m| m.mode != filmcraft_project::MaskMode::None);
-        if masked || !crate::gpufx::GPU_EFFECTS.contains(&e.effect.as_str()) {
+        // Transform's shutter blur (several placements averaged) is drawn on the CPU only
+        let shutter = e.effect == "transform" && e.param("shutter_override").and_then(|p| p.value.as_bool()).unwrap_or(false);
+        if masked || shutter || !crate::gpufx::GPU_EFFECTS.contains(&e.effect.as_str()) {
             return None;
         }
         chain.push(e);
@@ -430,6 +432,7 @@ fn push_item(
                 t: mt,
                 px_scale,
                 seconds: (t - item.start).seconds(),
+                frame_rate: seq.settings.frame_rate.as_f64(),
                 timecode: tc,
                 clip_name: &item.name,
                 project: Some(project),
