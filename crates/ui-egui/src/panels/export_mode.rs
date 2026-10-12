@@ -1001,15 +1001,34 @@ fn effects_section(ui: &mut egui::Ui, reg: &mut Reg, s: &mut ExportSettings, t: 
 
 pub(crate) const RANGES: [(&str, &str); 4] = [("entire", "Entire Source"), ("inOut", "Source In/Out"), ("workArea", "Work Area"), ("custom", "Custom")];
 
+/// Where the preview draws the output frame (inside `area`) and the sequence's picture in it. Both
+/// are drawn at the shape they are shown at (720x480 with 32:27 pixels is 16:9, not 3:2), and the
+/// picture is fitted as the export fits it, so the preview matches the file.
+fn preview_rects(area: Rect, s: &ExportSettings, seq: (u32, u32), seq_par: (u32, u32), out: (u32, u32)) -> (Rect, Rect) {
+    let shown = |(w, h): (u32, u32), par: (u32, u32)| ((f64::from(w.max(1)) * filmcraft_project::par_ratio(par)) as f32, h.max(1) as f32);
+    let (fw, fh) = shown(out, s.output_pixel_aspect(seq_par));
+    let pic = crate::panels::monitor::fit(area, fw, fh);
+    let (sw, sh) = shown(seq, seq_par);
+    let inner = match s.scaling {
+        Scaling::StretchToFill => pic,
+        Scaling::ScaleToFit => crate::panels::monitor::fit(pic, sw, sh),
+        Scaling::ScaleToFill => {
+            let k = (pic.width() / sw).max(pic.height() / sh);
+            Rect::from_center_size(pic.center(), vec2(sw * k, sh * k))
+        }
+    };
+    (pic, inner)
+}
+
 fn preview_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, seq_id: filmcraft_engine::project::ItemId) {
     let t = app.tokens;
     let mut reg = Reg::default();
     let Some(q) = app.session.active_sequence().cloned() else { return };
     let rate = q.settings.frame_rate;
-    // preview (aspect of the output frame)
+    // preview: the output frame with the picture fitted into it, as the export writes it
     let r = app.ui.export.settings.resolve(q.settings.width, q.settings.height, rate, q.settings.sample_rate);
     let pv_area = Rect::from_min_size(rect.min + vec2(14.0, 14.0), vec2(rect.width() - 28.0, (rect.height() * 0.42).max(160.0)));
-    let pic = crate::panels::monitor::fit(pv_area, r.width as f32, r.height as f32);
+    let (pic, inner) = preview_rects(pv_area, &app.ui.export.settings, (q.settings.width, q.settings.height), q.settings.par, (r.width, r.height));
     ui.painter().rect_filled(pic, 0.0, Color32::BLACK);
     if app.ui.export.settings.has_video() {
         let frame = rate.frame_at(app.session.playhead());
@@ -1019,14 +1038,6 @@ fn preview_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, seq_id:
         if let Some(img) = app.frames.get(&key) {
             let ctx = ui.ctx().clone();
             let tex = app.texture_for(&ctx, "export-preview", key, &img);
-            let inner = match app.ui.export.settings.scaling {
-                Scaling::StretchToFill => pic,
-                Scaling::ScaleToFit => crate::panels::monitor::fit(pic, q.settings.width as f32, q.settings.height as f32),
-                Scaling::ScaleToFill => {
-                    let s = (pic.width() / q.settings.width as f32).max(pic.height() / q.settings.height as f32);
-                    Rect::from_center_size(pic.center(), vec2(q.settings.width as f32 * s, q.settings.height as f32 * s))
-                }
-            };
             ui.painter().with_clip_rect(pic).image(tex, inner, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
     } else {
@@ -1067,7 +1078,7 @@ fn preview_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, seq_id:
     }
     // summary
     let range = range_ticks(ex, &q);
-    let sum = ex.settings.summary(q.settings.width, q.settings.height, rate, q.settings.sample_rate, range.1 - range.0);
+    let sum = ex.settings.summary_for(q.settings.width, q.settings.height, q.settings.par, rate, q.settings.sample_rate, range.1 - range.0);
     child.add_space(8.0);
     let resp = egui::Frame::NONE
         .fill(t.field_bg)
@@ -1480,4 +1491,46 @@ fn list_row(ui: &mut egui::Ui, t: &Tokens, selected: bool, text: &str, width: f3
     ui.painter().rect_filled(r, 3.0, bg);
     ui.painter().text(pos2(r.min.x + 6.0, r.center().y), Align2::LEFT_CENTER, text, Tokens::ui(12.5), if selected { Color32::WHITE } else { t.text });
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The preview draws the output frame and the picture at the shape they are shown at, fitted as
+    /// the export fits them: an SD widescreen sequence (32:27 pixels) fills a 16:9 frame, a 4:3 one
+    /// (8:9 pixels) sits between bars, and Match Source keeps the sequence's shape.
+    #[test]
+    fn the_preview_fits_the_picture_by_its_displayed_shape() {
+        let area = Rect::from_min_size(pos2(10.0, 20.0), vec2(1600.0, 900.0));
+        let aspect = |r: Rect| r.width() / r.height();
+        let fills = |pic: Rect, inner: Rect| (inner.width() - pic.width()).abs() < 0.5 && (inner.height() - pic.height()).abs() < 0.5;
+        let hd = ExportSettings { frame_size: Some((1920, 1080)), ..Default::default() };
+        let (pic, inner) = preview_rects(area, &hd, (720, 480), (32, 27), (1920, 1080));
+        assert!((aspect(pic) - 16.0 / 9.0).abs() < 1e-3, "{pic:?}");
+        assert!(fills(pic, inner), "a 16:9 picture fills the 16:9 frame: {inner:?} in {pic:?}");
+        let (pic, inner) = preview_rects(area, &hd, (720, 480), (8, 9), (1920, 1080));
+        assert!(
+            (inner.width() / pic.width() - 0.75).abs() < 1e-3 && (inner.height() - pic.height()).abs() < 0.5,
+            "a 4:3 picture between bars: {inner:?} in {pic:?}"
+        );
+        let fill = ExportSettings { scaling: Scaling::ScaleToFill, ..hd.clone() };
+        let (pic, inner) = preview_rects(area, &fill, (720, 480), (8, 9), (1920, 1080));
+        assert!((inner.width() - pic.width()).abs() < 0.5 && (inner.height() / pic.height() - 4.0 / 3.0).abs() < 1e-3, "{inner:?} in {pic:?}");
+        // Match Source: the file keeps the sequence's pixels, so the frame is shown 16:9 too
+        let (pic, inner) = preview_rects(area, &ExportSettings::default(), (720, 480), (32, 27), (720, 480));
+        assert!((aspect(pic) - 16.0 / 9.0).abs() < 1e-3, "{pic:?}");
+        assert!(fills(pic, inner), "{inner:?} in {pic:?}");
+        // square pixels chosen for an anamorphic sequence at its own frame size: 16:9 in a 3:2 frame
+        let square = ExportSettings { frame_size: Some((720, 480)), ..Default::default() };
+        let (pic, inner) = preview_rects(area, &square, (720, 480), (32, 27), (720, 480));
+        assert!((aspect(pic) - 1.5).abs() < 1e-3 && (aspect(inner) - 16.0 / 9.0).abs() < 1e-3, "{inner:?} in {pic:?}");
+        // a square-pixel sequence is drawn as before
+        let (pic, inner) = preview_rects(area, &hd, (1920, 1080), (1, 1), (1920, 1080));
+        assert!((aspect(pic) - 16.0 / 9.0).abs() < 1e-3 && fills(pic, inner), "{inner:?} in {pic:?}");
+        // hostile sizes and ratios give a finite rectangle
+        let odd = ExportSettings { pixel_aspect: Some((0, 0)), ..Default::default() };
+        let (pic, inner) = preview_rects(area, &odd, (0, 0), (0, 7), (0, 0));
+        assert!(pic.is_finite() && inner.is_finite(), "{inner:?} in {pic:?}");
+    }
 }
