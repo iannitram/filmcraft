@@ -183,7 +183,9 @@ fn gpu_chain<'a>(project: &Project, item: &'a TrackItem, opts: RenderOptions) ->
             continue;
         }
         let masked = e.masks.iter().any(|m| m.mode != filmcraft_project::MaskMode::None);
-        if masked || !crate::gpufx::GPU_EFFECTS.contains(&e.effect.as_str()) {
+        // Transform with its own shutter angle samples the animation over time: CPU only (#1088)
+        let shutter = e.effect == "transform" && crate::vfx::bv(e, "shutter_override");
+        if masked || shutter || !crate::gpufx::GPU_EFFECTS.contains(&e.effect.as_str()) {
             return None;
         }
         chain.push(e);
