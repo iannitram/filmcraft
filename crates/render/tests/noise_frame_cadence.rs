@@ -14,6 +14,7 @@ fn render_noise(effect_id: &str, rate: FrameRate, frame: i64, amount: f64) -> Ve
         t: tick,
         px_scale: 1.0,
         seconds: tick.seconds(),
+        frame_rate: 24.0,
         timecode: "00:00:00:00",
         clip_name: "generated matte",
         project: None,

@@ -184,3 +184,76 @@ fn nested_adjustment_layers_stay_in_their_sequence() {
     };
     assert_eq!(img.get(5, 5), plain.get(5, 5));
 }
+
+/// Upstream issue 1088: the Transform shutter must blur over the sequence's frame time. At 60 fps
+/// the frames before a move starts and after it ends are at rest and stay sharp, on a clip and on
+/// an adjustment layer alike (which once had no frame rate and blurred over a 24 fps frame).
+#[test]
+fn transform_shutter_blur_follows_the_sequence_frame_rate() {
+    use filmcraft_project::{Interpolation, Keyframe};
+    const R60: FrameRate = FrameRate::FPS_60;
+    for on_adjustment in [false, true] {
+        let mut p = Project::new("shutter");
+        let seq = p.new_sequence("s", SequenceSettings { width: 320, height: 180, frame_rate: R60, ..Default::default() }, 2, 0, None);
+        let mut map = SourceMap::default();
+        let red =
+            media(&mut p, &mut map, GeneratorSource::new(Generator::ColorMatte { color: [1.0, 0.0, 0.0, 1.0] }, 320, 180, R60, Tick(10 * TICKS_PER_SECOND)));
+        let mut items = vec![(0, red)];
+        if on_adjustment {
+            items.push((
+                1,
+                p.add_item(
+                    "Adjustment Layer",
+                    Label::Lavender,
+                    ItemKind::AdjustmentLayer { width: 320, height: 180, rate: R60, duration: R60.tick_of(120) },
+                    None,
+                ),
+            ));
+        }
+        let mut target = None;
+        for (track, item) in items {
+            let mut ti = p.make_track_item(item, TrackKind::Video, Tick::ZERO, TimeRange::new(Tick::ZERO, R60.tick_of(120)), R60).unwrap();
+            ti.scale_to_frame = true;
+            if on_adjustment && track == 0 {
+                // a box to move: a full-frame matte moved over itself would look unchanged
+                ti.effect_mut("motion").unwrap().params.get_mut("scale").unwrap().value = ParamValue::Float(50.0);
+            }
+            target = Some(ti.id);
+            let s = p.sequence_mut(seq).unwrap();
+            s.video_tracks[track].items.push(ti);
+        }
+        let target = target.unwrap();
+        let mut e = find_effect("transform").unwrap().instance();
+        e.params.get_mut("shutter_override").unwrap().value = ParamValue::Bool(true);
+        e.params.get_mut("shutter_angle").unwrap().value = ParamValue::Float(360.0);
+        let key = |f: i64, x: f64| {
+            let mut k = Keyframe::new(R60.tick_of(f), ParamValue::Vec2(filmcraft_geom::Vec2::new(x, 90.0)));
+            k.interp = Interpolation::Linear;
+            k
+        };
+        let pos = e.params.get_mut("position").unwrap();
+        pos.keyframes = vec![key(30, 160.0), key(60, 260.0)];
+        let it = p.sequence_mut(seq).unwrap().find_item_mut(target).unwrap().1;
+        let at = it.effects.iter().position(|e| e.def().is_some_and(|d| d.intrinsic)).unwrap_or(it.effects.len());
+        it.effects.insert(at, e);
+        let mut sharp = p.clone();
+        let it = sharp.sequence_mut(seq).unwrap().find_item_mut(target).unwrap().1;
+        it.effects.iter_mut().find(|e| e.effect == "transform").unwrap().params.get_mut("shutter_override").unwrap().value = ParamValue::Bool(false);
+        for frame in [28, 29, 61, 62] {
+            let a = render_sequence(&p, seq, R60.tick_of(frame), RenderOptions::default(), &map);
+            let b = render_sequence(&sharp, seq, R60.tick_of(frame), RenderOptions::default(), &map);
+            let d = a.px.iter().zip(&b.px).map(|(x, y)| (x - y).abs()).fold(0.0, f32::max);
+            assert!(d < 1e-3, "adjustment layer: {on_adjustment}, frame {frame} at rest is blurred ({d})");
+        }
+        // in the middle of the move the shutter does blur
+        let (a, b) = (
+            render_sequence(&p, seq, R60.tick_of(45), RenderOptions::default(), &map),
+            render_sequence(&sharp, seq, R60.tick_of(45), RenderOptions::default(), &map),
+        );
+        assert!(a.px.iter().zip(&b.px).any(|(x, y)| (x - y).abs() > 1e-2), "adjustment layer: {on_adjustment}: no blur mid-move");
+        // the frame plan (GPU playback and export) blurs as the CPU compositor does
+        let planned = plan::execute_cpu(&plan::plan_frame(&p, seq, R60.tick_of(45), RenderOptions::default(), &map));
+        let d = planned.px.iter().zip(&a.px).map(|(x, y)| (x - y).abs()).fold(0.0, f32::max);
+        assert!(d < 1e-3, "adjustment layer: {on_adjustment}: the frame plan dropped the shutter blur ({d})");
+    }
+}
