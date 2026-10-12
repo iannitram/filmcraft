@@ -21,6 +21,8 @@ pub struct FxCtx<'a> {
     pub px_scale: f32,
     /// Seconds since the clip start (for animated generators such as Noise/Strobe).
     pub seconds: f64,
+    /// The sequence's frame rate (frames per second): the frame time a shutter angle spans.
+    pub frame_rate: f64,
     /// Formatted sequence timecode (for the Timecode effect).
     pub timecode: &'a str,
     pub clip_name: &'a str,
@@ -930,6 +932,7 @@ mod tests {
             t: Tick::ZERO,
             px_scale: 1.0,
             seconds: 0.0,
+            frame_rate: 24.0,
             timecode: "00:00:01:00",
             clip_name: "x",
             project: None,
@@ -1525,6 +1528,7 @@ mod lumetri_cpu_parity_tests {
             t: Tick::ZERO,
             px_scale: 1.0,
             seconds: 0.0,
+            frame_rate: 24.0,
             timecode: "",
             clip_name: "",
             project: None,
@@ -1564,6 +1568,7 @@ mod lumetri_cpu_parity_tests {
             t: Tick::ZERO,
             px_scale: 1.0,
             seconds: 0.0,
+            frame_rate: 24.0,
             timecode: "",
             clip_name: "",
             project: None,
