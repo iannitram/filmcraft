@@ -36,7 +36,6 @@ Open threads in our own code (nobody is working on these; Ian decides whether a 
 - `crates/h264enc`: `EncoderConfig::threads = 1` still runs on rayon's global pool, so it uses every core (found by the optimization pass; relevant to `upstream issue` 1216).
 - Effect Controls: Deselect All (Cmd/Ctrl+Shift+A) still clears the Timeline clip selection instead of only the keyframes (found while fixing `upstream issue` 1241).
 - `upstream issue` 1251 (a language test that needs a Japanese font): a patch is written down in `nightly/2026-10-12.md` (fourth bug-fix run) but was never built or tested.
-- Export dialog: the Aspect drop-down still reads "Square Pixels (1.0)" when a Match Source export will keep an anamorphic sequence's pixels. The Summary line beside it is right since fork PR 8. Changing the label needs new translated strings.
 
 ## Bug-fix pass cursor
 
@@ -76,3 +75,4 @@ Write a claim here before starting an issue: `claimed: upstream issue <N>, <UTC 
 | `perf/h264enc-satd-mc` | h264enc: faster narrow-block SATD + fixed-width MC rows, byte-identical output | Merged into `ours` 2026-10-12 (PR 6). Re-measured on a 24-thread desktop (7 alternating pairs; another build was running, so it is noisy): median encode time −9% at 1080p and −13% at 720x480, every 720x480 pair faster, output the same size to the byte. Not yet upstream; upstream candidate |
 | `fix/2026-10-12-anamorphic-export-squeezed` | Exports of anamorphic sequences came out squeezed and Match Source dropped the pixel aspect (no upstream issue) | Merged into `ours` 2026-10-12 (PR 7). Not yet upstream; upstream candidate together with the branch below |
 | `fix/2026-10-12-anamorphic-export-preview` | Follow-up to PR 7: the Export dialog's preview and Summary line showed the old squeezed shape and "1.0"; AV1 (hardware-only, like H.265) keeps a matched pixel aspect in the track only | Merged into `ours` 2026-10-12 (PR 8). Branched from `ours` (it needs PR 7) |
+| `fix/2026-10-12-anamorphic-export-aspect-label` | Follow-up to PRs 7 and 8: the Export dialog's Aspect drop-down read "Square Pixels (1.0)" for a Match Source export that keeps an anamorphic sequence's pixels; it now reads "Match Source (1.19)". One new translated string (`Match Source ({par})`) in the es, ja, zh-cn, fr, pt-br and id catalogs, written by an AI agent from each catalog's own wording and not yet checked by a native speaker | Merged into `ours` 2026-10-12 (PR 9, `feaed1be`). Branched from `ours` (it needs PRs 7 and 8). Goes upstream together with them, if Ian says so |
