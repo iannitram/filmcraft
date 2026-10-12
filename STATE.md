@@ -44,4 +44,4 @@ Full findings: `nightly/2026-10-12.md` → Code review and Code review (second r
 |---|---|---|
 | fix/upstream-1088-transform-shutter | Transform shutter blur leaked into still frames / missing on GPU path (`upstream issue 1088`) | Merged into fork main 2026-10-12 (PR 2 = fix, PR 3 = extra GPU-plan test). Not yet upstream, so the nightly fast-forward sync will skip until upstream has it or main is merged instead |
 | `fix/upstream-1088-shutter-blur-frame-edges` | Transform shutter GPU-path fix (`upstream issue 1088`), second run | Merged into fork main 2026-10-12 (PR 2 = fix, PR 3 = extra GPU-plan test). Not yet upstream, so the nightly fast-forward sync will skip until upstream has it or main is merged instead |
-| `fix/upstream-1241-select-all-keyframes` | Cmd/Ctrl+A in Effect Controls selects keyframes, not Timeline clips (`upstream issue` 1241) | PR 4 open on our fork, all checks passing; upstream candidate |
+| `fix/upstream-1241-select-all-keyframes` | Cmd/Ctrl+A in Effect Controls selects keyframes, not Timeline clips (`upstream issue` 1241) | Merged into fork main 2026-10-12 (PR 4, merge commit a6e27e7). Not yet upstream; upstream candidate |
