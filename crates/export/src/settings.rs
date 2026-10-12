@@ -443,15 +443,17 @@ impl ExportSettings {
         self.format.is_image_sequence()
     }
 
-    /// The output's pixel aspect ratio for a sequence whose own is `seq_par`: the one set here;
-    /// else, at the sequence's frame size (Match Source), the sequence's, so an anamorphic
-    /// sequence (720x480 with 32:27 pixels) keeps its shape; else square.
+    /// The output's pixel aspect ratio for a sequence whose own is `seq_par`: the one set here,
+    /// else [`Self::unset_pixel_aspect`].
     pub fn output_pixel_aspect(&self, seq_par: (u32, u32)) -> (u32, u32) {
-        match self.pixel_aspect {
-            Some(par) => par,
-            None if self.frame_size.is_none() => filmcraft_project::sane_par(seq_par),
-            None => (1, 1),
-        }
+        self.pixel_aspect.unwrap_or_else(|| self.unset_pixel_aspect(seq_par))
+    }
+
+    /// The output's pixel aspect ratio when none is set here: at the sequence's frame size (Match
+    /// Source) the sequence's, so an anamorphic sequence (720x480 with 32:27 pixels) keeps its
+    /// shape; else square.
+    pub fn unset_pixel_aspect(&self, seq_par: (u32, u32)) -> (u32, u32) {
+        if self.frame_size.is_none() { filmcraft_project::sane_par(seq_par) } else { (1, 1) }
     }
 
     /// Output size, rate, audio format and bitrate for a sequence of `seq_w`×`seq_h` at `seq_rate`.

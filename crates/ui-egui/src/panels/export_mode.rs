@@ -425,14 +425,27 @@ const RATES: [(&str, FrameRate); 11] = [
     ("60", FrameRate::FPS_60),
 ];
 
+const SQUARE_PIXELS: &str = "Square Pixels (1.0)";
+
 pub(crate) const PARS: [(&str, Option<(u32, u32)>); 6] = [
-    ("Square Pixels (1.0)", None),
+    (SQUARE_PIXELS, None),
     ("D1/DV NTSC (0.9091)", Some((10, 11))),
     ("D1/DV PAL (1.0940)", Some((59, 54))),
     ("HD Anamorphic 1080 (1.333)", Some((4, 3))),
     ("DVCPRO HD (1.5)", Some((3, 2))),
     ("Anamorphic 2:1 (2.0)", Some((2, 1))),
 ];
+
+/// The Aspect drop-down's name for no pixel aspect of the export's own (the `None` of [`PARS`]):
+/// what the file then gets. That is square pixels, except at Match Source for a sequence with other
+/// pixels, which keeps them: "Match Source (1.19)" for 720x480 with 32:27 pixels, the ratio written
+/// as in the Summary.
+fn unset_par_label(s: &ExportSettings, seq_par: (u32, u32)) -> String {
+    match s.unset_pixel_aspect(seq_par) {
+        (n, d) if n == d => SQUARE_PIXELS.to_string(),
+        (n, d) => tlf!("Match Source ({par})", par = format!("{:.2}", f64::from(n.max(1)) / f64::from(d.max(1)))),
+    }
+}
 
 fn settings_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let t = app.tokens;
@@ -444,6 +457,7 @@ fn settings_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         .active_sequence()
         .map(|q| (q.settings.width, q.settings.height, q.settings.frame_rate, q.settings.sample_rate))
         .unwrap_or((1920, 1080, FrameRate::FPS_24, 48_000));
+    let seq_par = app.session.active_sequence().map_or((1, 1), |q| q.settings.par);
     let has_captions = app.session.active_sequence().is_some_and(|q| !q.caption_tracks.is_empty());
     // an HDR sequence exports HDR (H.265 Main 10 where the hardware encoder has it) unless SDR is asked for
     let seq_hdr = app.session.active_sequence().is_some_and(|q| q.settings.color.working.is_hdr());
@@ -528,7 +542,7 @@ fn settings_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         ui.add_space(8.0);
         let s = &mut ex.settings;
         if s.has_video() && section(ui, &mut reg, &mut ex.open_sections, "video", tl!("Video"), &t) {
-            video_section(ui, &mut reg, s, &t, seq_w, seq_h, seq_hdr);
+            video_section(ui, &mut reg, s, &t, seq_w, seq_h, seq_par, seq_hdr);
         }
         if (s.has_audio()
             || !s.has_video()
@@ -620,7 +634,7 @@ fn settings_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     reg.flush(app);
 }
 
-fn video_section(ui: &mut egui::Ui, reg: &mut Reg, s: &mut ExportSettings, t: &Tokens, seq_w: u32, seq_h: u32, seq_hdr: bool) {
+fn video_section(ui: &mut egui::Ui, reg: &mut Reg, s: &mut ExportSettings, t: &Tokens, seq_w: u32, seq_h: u32, seq_par: (u32, u32), seq_hdr: bool) {
     // frame size
     let mut match_size = s.frame_size.is_none();
     row(ui, t, tl!("Frame Size"), |ui| {
@@ -659,8 +673,10 @@ fn video_section(ui: &mut egui::Ui, reg: &mut Reg, s: &mut ExportSettings, t: &T
         }
     });
     row(ui, t, tl!("Aspect"), |ui| {
-        let cur = PARS.iter().find(|(_, p)| *p == s.pixel_aspect).map(|(l, _)| l.to_string()).unwrap_or_else(|| tl!("Custom").into());
-        let labels: Vec<(String, bool)> = PARS.iter().map(|(l, _)| (l.to_string(), true)).collect();
+        let unset = unset_par_label(s, seq_par);
+        let name = |(l, p): &(&str, Option<(u32, u32)>)| if p.is_none() { unset.clone() } else { l.to_string() };
+        let cur = PARS.iter().find(|(_, p)| *p == s.pixel_aspect).map(name).unwrap_or_else(|| tl!("Custom").into());
+        let labels: Vec<(String, bool)> = PARS.iter().map(|e| (name(e), true)).collect();
         if let Some(i) = combo(ui, reg, "export.video.aspect", &cur, &labels, 220.0) {
             s.pixel_aspect = PARS[i].1;
         }
@@ -1532,5 +1548,32 @@ mod tests {
         let odd = ExportSettings { pixel_aspect: Some((0, 0)), ..Default::default() };
         let (pic, inner) = preview_rects(area, &odd, (0, 0), (0, 7), (0, 0));
         assert!(pic.is_finite() && inner.is_finite(), "{inner:?} in {pic:?}");
+    }
+
+    /// The Aspect drop-down's entry for no pixel aspect of the export's own names what the file
+    /// gets: at Match Source the ratio of a sequence with non-square pixels (it read "Square Pixels
+    /// (1.0)" while the file kept 32:27), square pixels otherwise.
+    #[test]
+    fn the_aspect_entry_for_no_pixel_aspect_names_what_the_file_gets() {
+        let matched = ExportSettings::default();
+        assert_eq!(unset_par_label(&matched, (32, 27)), "Match Source (1.19)");
+        assert_eq!(unset_par_label(&matched, (8, 9)), "Match Source (0.89)");
+        assert_eq!(unset_par_label(&matched, (64, 45)), "Match Source (1.42)");
+        assert_eq!(unset_par_label(&matched, (1, 1)), "Square Pixels (1.0)");
+        // a chosen frame size gets square pixels: the picture is fitted into it
+        let hd = ExportSettings { frame_size: Some((1920, 1080)), ..Default::default() };
+        assert_eq!(unset_par_label(&hd, (32, 27)), "Square Pixels (1.0)");
+        // the entry is named the same while another ratio is chosen
+        let chosen = ExportSettings { pixel_aspect: Some((10, 11)), ..Default::default() };
+        assert_eq!(unset_par_label(&chosen, (32, 27)), "Match Source (1.19)");
+        // the Summary writes the same ratio
+        assert!(matched.summary_for(720, 480, (32, 27), FrameRate::FPS_24, 48_000, Tick(0)).video.starts_with("720x480 (1.19), "));
+        // hostile ratios are square pixels
+        for par in [(0, 0), (0, 7), (5, 0), (u32::MAX, 1)] {
+            assert_eq!(unset_par_label(&matched, par), "Square Pixels (1.0)", "{par:?}");
+        }
+        crate::i18n::set_current(crate::i18n::Language::Es);
+        assert_eq!(unset_par_label(&matched, (32, 27)), "Igual que el origen (1.19)");
+        crate::i18n::set_current(crate::i18n::Language::En);
     }
 }

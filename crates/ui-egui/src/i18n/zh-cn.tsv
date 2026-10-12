@@ -2900,6 +2900,7 @@
 	Audio Format	音频格式
 	Uncompressed (PCM)	未压缩（PCM）
 	Match Source ({seq_sr} Hz)	匹配源（{seq_sr} Hz）
+	Match Source ({par})	匹配源（{par}）
 	Channels	声道
 	Audio Bitrate	音频码率
 	Sample Size	采样大小
