@@ -34,6 +34,10 @@ Full findings: `nightly/2026-10-12.md` → Code review and Code review (second r
 
 2026-10-12: fixed 1241 (PR 4). Skipped because upstream PRs cover them: 1158, 1191, 1163, 1183, 1184, 1187, 1188, 1189, 1190. Skipped as features or too vague: 1176, 1205, 1117, 1186. Skipped as OS-specific: 1235, 1234, 1157, 1134, 1229, 1212. Next run: start from issues newer than 1243, or recheck 1205 if it gets steps to reproduce.
 
+## Bug-fix cursor (fourth run)
+
+2026-10-12: fixed 1249 (PR 5). 1250 is already fixed upstream by `4ccc1a8` (verified, don't redo). 1251 was not reproducible here: the sandbox checker refused hiding the system Japanese fonts. A patch is proposed in the log; Ian decides. Skipped 1244, 1246 (architectural), 1247, 1248, 1252, 1253. Next run: issues newer than 1253, or 1251 if Ian approves.
+
 ## Design notes
 
 (none)
@@ -45,3 +49,4 @@ Full findings: `nightly/2026-10-12.md` → Code review and Code review (second r
 | fix/upstream-1088-transform-shutter | Transform shutter blur leaked into still frames / missing on GPU path (`upstream issue 1088`) | Merged into fork main 2026-10-12 (PR 2 = fix, PR 3 = extra GPU-plan test). Not yet upstream, so the nightly fast-forward sync will skip until upstream has it or main is merged instead |
 | `fix/upstream-1088-shutter-blur-frame-edges` | Transform shutter GPU-path fix (`upstream issue 1088`), second run | Merged into fork main 2026-10-12 (PR 2 = fix, PR 3 = extra GPU-plan test). Not yet upstream, so the nightly fast-forward sync will skip until upstream has it or main is merged instead |
 | `fix/upstream-1241-select-all-keyframes` | Cmd/Ctrl+A in Effect Controls selects keyframes, not Timeline clips (`upstream issue` 1241) | Merged into fork main 2026-10-12 (PR 4, merge commit a6e27e7). Not yet upstream; upstream candidate |
+| `fix/upstream-1249-apv-oracle-old-ffmpeg` | APV oracle tests skip instead of failing when ffmpeg < 8.0 (`upstream issue` 1249) | PR 5 open on the fork, ready to merge; upstream candidate |
