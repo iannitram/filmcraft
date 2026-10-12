@@ -731,6 +731,24 @@ fn match_source_keeps_the_sequences_pixel_aspect() {
     assert_eq!(filmcraft_codecs::open_bytes("square.mp4", bytes).unwrap().info().video.clone().unwrap().par, (1, 1));
 }
 
+/// The summary names the pixel aspect the file gets: the sequence's at Match Source, square at a
+/// chosen frame size, and a chosen ratio as before.
+#[test]
+fn the_summary_names_the_output_pixel_aspect() {
+    let line = |s: &ExportSettings, par: (u32, u32)| s.summary_for(720, 480, par, FrameRate::FPS_24, 48_000, Tick(TICKS_PER_SECOND)).video;
+    let matched = ExportSettings::default();
+    assert!(line(&matched, (32, 27)).starts_with("720x480 (1.19), "), "{}", line(&matched, (32, 27)));
+    assert!(line(&matched, (8, 9)).starts_with("720x480 (0.89), "), "{}", line(&matched, (8, 9)));
+    assert!(line(&matched, (1, 1)).starts_with("720x480 (1.0), "), "{}", line(&matched, (1, 1)));
+    assert!(line(&matched, (0, 5)).starts_with("720x480 (1.0), "), "a hostile ratio is square: {}", line(&matched, (0, 5)));
+    let hd = ExportSettings { frame_size: Some((1920, 1080)), ..Default::default() };
+    assert!(line(&hd, (32, 27)).starts_with("1920x1080 (1.0), "), "{}", line(&hd, (32, 27)));
+    let chosen = ExportSettings { pixel_aspect: Some((10, 11)), ..Default::default() };
+    assert!(line(&chosen, (32, 27)).starts_with("720x480 (0.91), "), "{}", line(&chosen, (32, 27)));
+    // `summary` is the square-pixel sequence
+    assert_eq!(matched.summary(720, 480, FrameRate::FPS_24, 48_000, Tick(TICKS_PER_SECOND)).video, line(&matched, (1, 1)));
+}
+
 /// Integrated loudness of planar audio.
 fn lufs(planar: &[Vec<f32>], sr: u32) -> (f64, f64) {
     let refs: Vec<&[f32]> = planar.iter().map(Vec::as_slice).collect();
