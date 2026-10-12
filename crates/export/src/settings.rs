@@ -586,12 +586,21 @@ pub struct Summary {
 impl ExportSettings {
     /// Summary lines for a sequence of `seq_w`×`seq_h` at `seq_rate` / `seq_sr` exporting `duration`.
     pub fn summary(&self, seq_w: u32, seq_h: u32, seq_rate: FrameRate, seq_sr: u32, duration: Tick) -> Summary {
+        self.summary_for(seq_w, seq_h, (1, 1), seq_rate, seq_sr, duration)
+    }
+
+    /// [`Self::summary`] for a sequence with `seq_par` pixels: the video line names the pixel aspect
+    /// the file gets ([`Self::output_pixel_aspect`]), which at Match Source is the sequence's.
+    pub fn summary_for(&self, seq_w: u32, seq_h: u32, seq_par: (u32, u32), seq_rate: FrameRate, seq_sr: u32, duration: Tick) -> Summary {
         let r = self.resolve(seq_w, seq_h, seq_rate, seq_sr);
         let mbps = |k: u32| format!("{:.2} Mbps", k as f64 / 1000.0);
         let video = if !self.has_video() {
             "No video".to_string()
         } else {
-            let par = self.pixel_aspect.map(|(n, d)| format!("{:.2}", n.max(1) as f64 / d.max(1) as f64)).unwrap_or_else(|| "1.0".into());
+            let par = match self.output_pixel_aspect(seq_par) {
+                (n, d) if self.pixel_aspect.is_none() && n == d => "1.0".to_string(),
+                (n, d) => format!("{:.2}", n.max(1) as f64 / d.max(1) as f64),
+            };
             let mut v = format!("{}x{} ({par}), {} fps, {}", r.width, r.height, r.rate.label(), self.field_order.label());
             match self.video_format() {
                 Format::H264 => {
