@@ -682,3 +682,26 @@ fn mask_keyframe_menus_preserve_the_effect_and_other_masks() {
         assert_eq!(effect(&d), before);
     }
 }
+
+/// #1241: Cmd/Ctrl+A with Effect Controls focused selects the shown clip's keyframes, not every
+/// clip in the Timeline.
+#[test]
+fn select_all_in_effect_controls_selects_keyframes_not_clips() {
+    let (mut d, clip) = Driver::demo();
+    let keys = lane_keys(&mut d, &clip, &[("scale", 1.0), ("rotation", 2.0)]);
+    d.ok("ui.set", json!({"focused": "EffectControls"}));
+    d.frames(2);
+    let clips = d.harness.state().session.state.selection.clone();
+    let command = egui::Modifiers::COMMAND;
+    for pressed in [true, false] {
+        d.harness.input_mut().events.push(egui::Event::Key { key: egui::Key::A, physical_key: None, pressed, repeat: false, modifiers: command });
+        d.frames(1);
+    }
+    d.frames(2);
+    let selected = &d.harness.state().ui.keyframe_selection;
+    assert_eq!(selected.len(), keys.len(), "Select All must select every keyframe: {selected:?}");
+    for key in &keys {
+        assert!(selected.contains(key), "{key:?} not selected");
+    }
+    assert_eq!(d.harness.state().session.state.selection, clips, "the Timeline selection must not change");
+}
