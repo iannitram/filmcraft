@@ -1109,6 +1109,7 @@ mod tests {
             t: Tick::ZERO,
             px_scale: 1.0,
             seconds: 0.0,
+            frame_rate: 24.0,
             timecode: "",
             clip_name: "",
             project: None,
