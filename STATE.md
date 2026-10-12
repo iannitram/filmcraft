@@ -27,6 +27,10 @@ Full findings: `nightly/2026-10-12.md` → Code review section.
 
 2026-10-12: 1171 not reproducible on Linux (likely macOS/Windows only); 1203 already covered by an engine test; 1153 waiting on the maintainer. Don't redo these.
 
+## Optimization pass cursor
+
+2026-10-12: SD H.264 decode, deblocking filter. Two bit-exact attempts (per-MB transpose of vertical edges; 64-bit word-swap transpose), both within noise, nothing kept. Don't retry deblock transposes. Next target in rotation: **H.264 export path incl. SD->1080p scaling with pixel-aspect correction** (CPU scaler / colour conversion / h264enc), then seek / scrub latency on long-GOP MP4. Skip anything `upstream PR` 883 / 884 (H.264 MC/IDCT SIMD) or 1076 (HEVC threads) cover.
+
 ## Design notes
 
 (none)
