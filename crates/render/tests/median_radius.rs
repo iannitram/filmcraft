@@ -13,6 +13,7 @@ fn cx() -> FxCtx<'static> {
         t: Tick::ZERO,
         px_scale: 1.0,
         seconds: 0.0,
+        frame_rate: 24.0,
         timecode: "00:00:01:00",
         clip_name: "x",
         project: None,
