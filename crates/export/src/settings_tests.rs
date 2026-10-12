@@ -641,6 +641,96 @@ fn frame_size_rate_and_scaling() {
     assert!(f[(5 * 200 + 100) * 4] > 200, "filled to the top edge");
 }
 
+/// A `w`×`h` 24 fps sequence with `par` pixels, filled by a red matte that has the same pixels (1 s).
+fn anamorphic(w: u32, h: u32, par: (u32, u32)) -> (Arc<Project>, ItemId, SourceMap) {
+    let mut p = Project::new("par");
+    let r = FrameRate::FPS_24;
+    let g = GeneratorSource::new(Generator::ColorMatte { color: [1.0, 0.0, 0.0, 1.0] }, w, h, r, Tick(2 * TICKS_PER_SECOND));
+    let info = g.info().clone();
+    let id = p.add_item(
+        &info.name.clone(),
+        Label::Iris,
+        ItemKind::Media(MediaClip {
+            media: MediaRef::Generator(g.generator.clone()),
+            info,
+            interpret: filmcraft_project::Interpretation { par: Some(par), ..Default::default() },
+            mark_in: None,
+            mark_out: None,
+            markers: vec![],
+            offline: false,
+            proxy: None,
+            identity: None,
+        }),
+        None,
+    );
+    let mut m = SourceMap::default();
+    m.0.insert(id, Arc::new(g) as Arc<dyn MediaSource>);
+    let seq = p.new_sequence("s", SequenceSettings { width: w, height: h, frame_rate: r, par, ..Default::default() }, 1, 0, None);
+    let vi = p.make_track_item(id, TrackKind::Video, Tick::ZERO, TimeRange::new(Tick::ZERO, r.tick_of(24)), r).unwrap();
+    p.sequence_mut(seq).unwrap().video_tracks[0].items.push(vi);
+    (Arc::new(p), seq, m)
+}
+
+/// An SD widescreen sequence (32:27 pixels) is a 16:9 picture and a 4:3 one (8:9 pixels) a 4:3
+/// picture: the export fits them into the output frame by the shape they are shown at, not by
+/// their stored width.
+#[test]
+fn anamorphic_sequences_export_at_their_displayed_shape() {
+    let dir = Scratch::new("par-shape");
+    // the red of the middle row at `x` in a frame of the export
+    let red = |name: &str, settings: ExportSettings, (p, seq, m): (Arc<Project>, ItemId, SourceMap), x: usize| -> u8 {
+        let path = dir.path(name);
+        let s = ExportSettings { format: Format::H264, path: path.clone(), include_audio: false, ..settings };
+        let (w, h) = s.frame_size.unwrap();
+        export(&p, seq, &s, &m, &Progress::default()).unwrap();
+        let bytes: Arc<[u8]> = std::fs::read(&path).unwrap().into();
+        let src = filmcraft_codecs::open_bytes(name, bytes).unwrap();
+        let v = src.info().video.clone().unwrap();
+        assert_eq!((v.width, v.height), (w, h), "{name}");
+        let f = src.video_frame(FrameRequest::full(Tick(TICKS_PER_SECOND / 2))).unwrap().to_rgba8();
+        f[((h as usize / 2) * w as usize + x) * 4]
+    };
+    let hd = || ExportSettings { frame_size: Some((384, 216)), ..Default::default() };
+    // 144x96 with 32:27 pixels is 16:9: it fills a 16:9 frame from edge to edge
+    assert!(red("wide.mp4", hd(), anamorphic(144, 96, (32, 27)), 4) > 200, "no bar on the left");
+    assert!(red("wide.mp4", hd(), anamorphic(144, 96, (32, 27)), 379) > 200, "no bar on the right");
+    // 144x96 with 8:9 pixels is 4:3: 288 wide in the middle, with 48-pixel bars
+    assert!(red("narrow.mp4", hd(), anamorphic(144, 96, (8, 9)), 40) < 40, "bar on the left");
+    assert!(red("narrow.mp4", hd(), anamorphic(144, 96, (8, 9)), 60) > 200, "picture beside the bar");
+    assert!(red("narrow.mp4", hd(), anamorphic(144, 96, (8, 9)), 343) < 40, "bar on the right");
+    // the same pixels out as in: nothing to fit
+    let same = ExportSettings { frame_size: Some((144, 96)), pixel_aspect: Some((32, 27)), ..Default::default() };
+    assert!(red("same.mp4", same, anamorphic(144, 96, (32, 27)), 4) > 200, "the picture reaches the left edge");
+}
+
+/// Match Source keeps the sequence's pixel aspect: the file says 32:27 like the sequence, so
+/// players show the 16:9 picture instead of a squeezed 3:2 one.
+#[test]
+fn match_source_keeps_the_sequences_pixel_aspect() {
+    let dir = Scratch::new("par-match");
+    let (p, seq, m) = anamorphic(144, 96, (32, 27));
+    let path = dir.path("match.mp4");
+    export(&p, seq, &ExportSettings { format: Format::H264, path: path.clone(), include_audio: false, ..Default::default() }, &m, &Progress::default())
+        .unwrap();
+    let bytes: Arc<[u8]> = std::fs::read(&path).unwrap().into();
+    let src = filmcraft_codecs::open_bytes("match.mp4", bytes).unwrap();
+    let v = src.info().video.clone().unwrap();
+    assert_eq!((v.width, v.height, v.par), (144, 96, (32, 27)));
+    let f = src.video_frame(FrameRequest::full(Tick(TICKS_PER_SECOND / 2))).unwrap().to_rgba8();
+    assert!(f[(48 * 144 + 4) * 4] > 200, "the stored picture is untouched");
+    if let Some(j) = ffprobe_json(&["-show_streams", "-select_streams", "v:0"], &path) {
+        let st = &j["streams"][0];
+        assert_eq!((&st["sample_aspect_ratio"], &st["display_aspect_ratio"]), (&serde_json::json!("32:27"), &serde_json::json!("16:9")));
+    }
+    // a square-pixel sequence still signals nothing
+    let (p, seq, m) = matte([1.0, 0.0, 0.0, 1.0], 144, 96, None);
+    let path = dir.path("square.mp4");
+    export(&p, seq, &ExportSettings { format: Format::H264, path: path.clone(), include_audio: false, ..Default::default() }, &m, &Progress::default())
+        .unwrap();
+    let bytes: Arc<[u8]> = std::fs::read(&path).unwrap().into();
+    assert_eq!(filmcraft_codecs::open_bytes("square.mp4", bytes).unwrap().info().video.clone().unwrap().par, (1, 1));
+}
+
 /// Integrated loudness of planar audio.
 fn lufs(planar: &[Vec<f32>], sr: u32) -> (f64, f64) {
     let refs: Vec<&[f32]> = planar.iter().map(Vec::as_slice).collect();
