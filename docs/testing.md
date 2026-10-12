@@ -52,6 +52,9 @@ are never linked or shipped ([AGENTS.md](../AGENTS.md) §2).
 - If a tool is missing the test prints `SKIPPED (<test>): ffmpeg not found …` and passes. Set
   **`FILMCRAFT_REQUIRE_ORACLES=1`** (CI) to make every such skip a failure. In new tests use
   `let ff = filmcraft_testkit::require_ffmpeg!();` (also `require_ffprobe!`, `require_oracles!`).
+- Some oracles need a recent or fuller ffmpeg build and skip the same way when it lacks them:
+  the `apv` oracle needs **ffmpeg 8.0 or newer** (its APV demuxer and decoder), the `av1` oracle
+  needs libsvtav1 / libdav1d / libaom, the `opus` oracle libopus.
 - Fixtures are generated on first use into `<workspace>/target/fixtures/<crate>/`
   (`filmcraft_testkit::fixtures_dir`; independent of `CARGO_TARGET_DIR`, so agents with private
   target dirs share them; `FILMCRAFT_FIXTURES_DIR` overrides the root) and reused afterwards.
