@@ -1112,6 +1112,54 @@ mod pipeline {
         p.sequence_mut(seq).unwrap().video_tracks[track].items.push(ti);
     }
 
+    /// #1088: the Transform shutter blurs only while the layer moves (the frames before the first
+    /// and after the last position keyframe stay sharp), and the GPU frame plan draws that blur
+    /// too: the GPU Transform has no shutter, so it used to drop the blur entirely.
+    #[test]
+    fn transform_shutter_blurs_the_move_on_every_path() {
+        let mut p = Project::new("shutter");
+        let mut map = SourceMap::default();
+        let ocean = add(&mut p, &mut map, GeneratorSource::demo(DemoScene::OceanSunset));
+        let seq = p.new_sequence("s", SequenceSettings { width: 64, height: 36, frame_rate: FrameRate::FPS_24, ..Default::default() }, 1, 0, None);
+        let r = FrameRate::FPS_24;
+        let mut e = inst("transform");
+        set(&mut e, "shutter_override", ParamValue::Bool(true));
+        setf(&mut e, "shutter_angle", 360.0);
+        let key = |f: i64, x: f64| {
+            let mut k = Keyframe::new(r.tick_of(f), ParamValue::Vec2(filmcraft_geom::Vec2::new(x, 18.0)));
+            k.interp = Interpolation::Linear;
+            k
+        };
+        e.params.insert(
+            "position".into(),
+            Param { value: ParamValue::Vec2(filmcraft_geom::Vec2::new(960.0, 18.0)), keyframes: vec![key(12, 960.0), key(24, 1960.0)] },
+        );
+        let mut still = e.clone();
+        set(&mut still, "shutter_override", ParamValue::Bool(false));
+        place(&mut p, seq, 0, ocean, vec![still]);
+        let sharp = |p: &Project, f: i64| render_sequence(p, seq, r.tick_of(f), RenderOptions::default(), &map);
+        let (s11, s25) = (sharp(&p, 11), sharp(&p, 25));
+        if let Some(ti) = p.sequence_mut(seq).and_then(|s| s.video_tracks.get_mut(0)).and_then(|t| t.items.get_mut(0)) {
+            ti.effects[0] = e;
+        }
+        let d11 = max_diff(&s11, &sharp(&p, 11));
+        let d25 = max_diff(&s25, &sharp(&p, 25));
+        assert!(d11 < 1e-4, "frame 11, before the first keyframe, is blurred ({d11})");
+        assert!(d25 < 1e-4, "frame 25, after the last keyframe, is blurred ({d25})");
+        let d18 = max_diff(&sharp(&p, 18), &{
+            let mut q = p.clone();
+            if let Some(ti) = q.sequence_mut(seq).and_then(|s| s.video_tracks.get_mut(0)).and_then(|t| t.items.get_mut(0)) {
+                set(&mut ti.effects[0], "shutter_override", ParamValue::Bool(false));
+            }
+            sharp(&q, 18)
+        });
+        assert!(d18 > 1e-3, "frame 18, mid-move, is not blurred ({d18})");
+        // the GPU frame plan draws the same blurred picture (its Transform op has no shutter)
+        let planned = crate::plan::execute_cpu(&crate::plan::plan_frame(&p, seq, r.tick_of(18), RenderOptions::default(), &map));
+        let d = max_diff(&planned, &sharp(&p, 18));
+        assert!(d < 1e-3, "the frame plan drops the shutter blur ({d})");
+    }
+
     #[test]
     fn temporal_and_track_effects_render_through_the_sequence() {
         let mut p = Project::new("vfx");
