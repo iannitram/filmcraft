@@ -241,6 +241,11 @@ impl Exporter {
         settings.max_bitrate_kbps = Some(r.max_kbps);
         settings.keyframe_distance = Some(r.keyint);
         settings.adaptive_bitrate = None;
+        // Match Source keeps the pixels of an anamorphic sequence: signal them like a chosen ratio
+        let par = settings.output_pixel_aspect(q.settings.par);
+        if settings.pixel_aspect.is_none() && par.0 != par.1 {
+            settings.pixel_aspect = Some(par);
+        }
         let two_pass = settings.video_format() == Format::H264 && settings.bitrate_mode == BitrateMode::Vbr2Pass;
         settings.h264_pass = if two_pass { H264Pass::First } else { H264Pass::Single };
         let range = export_range(&project, seq, &settings)?;
@@ -417,7 +422,12 @@ impl Exporter {
         let mut opts = WriterOptions::new(self.brand);
         opts.metadata = self.settings.metadata.udta();
         let mut mux = Mp4Writer::new(file, opts).map_err(|e| ExportError::Io(e.to_string()))?;
-        let mut vcfg = TrackConfig::new(self.venc.sample_entry(), self.venc.timescale());
+        let mut entry = self.venc.sample_entry();
+        // non-square pixels go in the track too (`pasp`), where players and our own importer read them
+        if let (Some(par), Some(v)) = (self.settings.pixel_aspect.filter(|(n, d)| *n > 0 && *d > 0 && n != d), entry.video.as_mut()) {
+            v.pixel_aspect = Some(par);
+        }
+        let mut vcfg = TrackConfig::new(entry, self.venc.timescale());
         vcfg.media_start = self.venc.media_start();
         self.vt = mux.add_track(vcfg).map_err(|e| ExportError::Io(e.to_string()))?;
         self.at = match (&self.audio, &self.aenc) {
