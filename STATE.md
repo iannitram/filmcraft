@@ -19,6 +19,10 @@ First code review done 2026-10-12 (run cut short by a 05:00 UTC hard stop; 4 of 
 
 Full findings: `nightly/2026-10-12.md` → Code review section.
 
+## Bug-fix pass cursor
+
+2026-10-12: looked at `upstream issue` 1171 (couldn't reproduce, needs the reporter's file), 1127 (probably fixed upstream; AVI multi-audio gap), 1088 (fixed, PR 2). Next run: don't redo these; check whether 1171 or 1127 got new comments.
+
 ## Design notes
 
 (none)
@@ -27,3 +31,4 @@ Full findings: `nightly/2026-10-12.md` → Code review section.
 
 | Branch | Purpose | Status |
 |---|---|---|
+| fix/upstream-1088-transform-shutter | Transform shutter blur leaked into still frames / missing on GPU path (`upstream issue 1088`) | PR https://github.com/iannitram/filmcraft/pull/2 open, tests green on cloud CPU; needs Z13 GPU check |
