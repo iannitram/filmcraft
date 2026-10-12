@@ -35,5 +35,5 @@ Full findings: `nightly/2026-10-12.md` → Code review section.
 
 | Branch | Purpose | Status |
 |---|---|---|
-| fix/upstream-1088-transform-shutter | Transform shutter blur leaked into still frames / missing on GPU path (`upstream issue 1088`) | PR https://github.com/iannitram/filmcraft/pull/2 merged into fork main 2026-10-12; still needs Z13 GPU check and an upstream PR (Ian) |
-| `fix/upstream-1088-shutter-blur-frame-edges` | Transform shutter GPU-path fix (`upstream issue 1088`), second run | PR https://github.com/iannitram/filmcraft/pull/3 open. **Duplicates PR 2** (PR 2 is the better fix); recommend closing |
+| fix/upstream-1088-transform-shutter | Transform shutter blur leaked into still frames / missing on GPU path (`upstream issue 1088`) | Merged into fork main 2026-10-12 (PR 2 = fix, PR 3 = extra GPU-plan test). Not yet upstream, so the nightly fast-forward sync will skip until upstream has it or main is merged instead |
+| `fix/upstream-1088-shutter-blur-frame-edges` | Transform shutter GPU-path fix (`upstream issue 1088`), second run | Merged into fork main 2026-10-12 (PR 2 = fix, PR 3 = extra GPU-plan test). Not yet upstream, so the nightly fast-forward sync will skip until upstream has it or main is merged instead |
