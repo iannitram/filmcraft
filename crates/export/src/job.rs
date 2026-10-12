@@ -244,10 +244,10 @@ impl Exporter {
         settings.keyframe_distance = Some(r.keyint);
         settings.adaptive_bitrate = None;
         // Match Source keeps the pixels of an anamorphic sequence: signal them like a chosen ratio.
-        // H.265 has only hardware encoders, which write no pixel aspect and decline one: there the
-        // track alone (`pasp`) carries it
+        // A format without a built-in encoder (H.265, AV1) has only hardware encoders, which write
+        // no pixel aspect and decline one: there the track alone (`pasp`) carries it
         let par = Some(settings.output_pixel_aspect(q.settings.par)).filter(|(n, d)| *n > 0 && *d > 0 && n != d);
-        if settings.pixel_aspect.is_none() && settings.video_format() != Format::Hevc {
+        if settings.pixel_aspect.is_none() && settings.video_format().has_builtin_encoder() {
             settings.pixel_aspect = par;
         }
         let two_pass = settings.video_format() == Format::H264 && settings.bitrate_mode == BitrateMode::Vbr2Pass;
