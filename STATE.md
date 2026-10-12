@@ -1,5 +1,7 @@
 # State
 
+*Tidied 2026-10-12 by a daytime session after the first night: several runs of each routine had left one cursor section per run. From here on there is **one section per routine**: add your new line at the end of your own section, and don't add new sections.*
+
 ## Review cursor
 
 Second code review run done 2026-10-12 (finished within budget, ~15 min used). Reviewed the 4 PRs the first run didn't reach (429, 1076, 884 are ready; 1201 needs a rebase). 408/409/495/629 unchanged since the first run, carried forward without re-review. Next run: re-check any of the 8 whose head commit changed; if all 8 are unchanged, there's nothing to re-review — consider scanning the wider open-PR list again for new WISHLIST-area matches (checked once this run, nothing beat the current 8).
@@ -19,25 +21,29 @@ Second code review run done 2026-10-12 (finished within budget, ~15 min used). R
 
 Full findings: `nightly/2026-10-12.md` → Code review and Code review (second run) sections.
 
+Open threads in our own code (nobody is working on these; Ian decides whether a run takes one):
+
+- `crates/h264enc`: `EncoderConfig::threads = 1` still runs on rayon's global pool, so it uses every core (found by the optimization pass; relevant to `upstream issue` 1216).
+- Effect Controls: Deselect All (Cmd/Ctrl+Shift+A) still clears the Timeline clip selection instead of only the keyframes (found while fixing `upstream issue` 1241).
+- `upstream issue` 1251 (a language test that needs a Japanese font): a patch is written down in `nightly/2026-10-12.md` (fourth bug-fix run) but was never built or tested.
+- Export dialog: the Aspect drop-down still reads "Square Pixels (1.0)" when a Match Source export will keep an anamorphic sequence's pixels. The Summary line beside it is right since fork PR 8. Changing the label needs new translated strings.
+
 ## Bug-fix pass cursor
 
-2026-10-12: looked at `upstream issue` 1171 (couldn't reproduce, needs the reporter's file), 1127 (probably fixed upstream; AVI multi-audio gap), 1088 (fixed, PR 2). Next run: don't redo these; check whether 1171 or 1127 got new comments.
+Write a claim here before starting an issue: `claimed: upstream issue <N>, <UTC time>`.
 
-## Bug-fix cursor (second run)
-
-2026-10-12: 1171 not reproducible on Linux (likely macOS/Windows only); 1203 already covered by an engine test; 1153 waiting on the maintainer. Don't redo these.
+- 2026-10-12, run 1: looked at `upstream issue` 1171 (couldn't reproduce, needs the reporter's file), 1127 (probably fixed upstream; AVI multi-audio gap), 1088 (fixed, PR 2). Don't redo these; check whether 1171 or 1127 got new comments.
+- 2026-10-12, run 2: 1171 not reproducible on Linux (likely macOS/Windows only); 1203 already covered by an engine test; 1153 waiting on the maintainer. Don't redo these.
+- 2026-10-12, run 3: fixed 1241 (PR 4). Skipped because upstream PRs cover them: 1158, 1191, 1163, 1183, 1184, 1187, 1188, 1189, 1190. Skipped as features or too vague: 1176, 1205, 1117, 1186. Skipped as OS-specific: 1235, 1234, 1157, 1134, 1229, 1212.
+- 2026-10-12, run 4: fixed 1249 (PR 5). 1250 is already fixed upstream by `4ccc1a8` (verified, don't redo). 1251 was not reproducible here: the sandbox checker refused hiding the system Japanese fonts. A patch is proposed in the log; Ian decides. Skipped 1244, 1246 (architectural), 1247, 1248, 1252, 1253.
+- **Next run:** issues newer than 1253; recheck 1205 if it gets steps to reproduce; 1251 only if Ian approves.
 
 ## Optimization pass cursor
 
-2026-10-12: SD H.264 decode, deblocking filter. Two bit-exact attempts (per-MB transpose of vertical edges; 64-bit word-swap transpose), both within noise, nothing kept. Don't retry deblock transposes. Next target in rotation: **H.264 export path incl. SD->1080p scaling with pixel-aspect correction** (CPU scaler / colour conversion / h264enc), then seek / scrub latency on long-GOP MP4. Skip anything `upstream PR` 883 / 884 (H.264 MC/IDCT SIMD) or 1076 (HEVC threads) cover.
-2026-10-12 (second run): H.264 export encoder: SATD (8/4-wide) + fixed-width MC rows, −8.9%, kept (PR 6). Don't redo SATD 16-wide in plain Rust (already near its limit). Next target in rotation: **seek / scrub latency on long-GOP MP4**, then the SD->1080p scaler (CPU) and h264enc transform/quant (26% of encode). Open thread: `threads = 1` in h264enc still uses the global rayon pool (all cores), relevant to `upstream issue` 1216.
-## Bug-fix cursor (third run)
-
-2026-10-12: fixed 1241 (PR 4). Skipped because upstream PRs cover them: 1158, 1191, 1163, 1183, 1184, 1187, 1188, 1189, 1190. Skipped as features or too vague: 1176, 1205, 1117, 1186. Skipped as OS-specific: 1235, 1234, 1157, 1134, 1229, 1212. Next run: start from issues newer than 1243, or recheck 1205 if it gets steps to reproduce.
-
-## Bug-fix cursor (fourth run)
-
-2026-10-12: fixed 1249 (PR 5). 1250 is already fixed upstream by `4ccc1a8` (verified, don't redo). 1251 was not reproducible here: the sandbox checker refused hiding the system Japanese fonts. A patch is proposed in the log; Ian decides. Skipped 1244, 1246 (architectural), 1247, 1248, 1252, 1253. Next run: issues newer than 1253, or 1251 if Ian approves.
+- 2026-10-12, run 1: SD H.264 decode, deblocking filter. Two bit-exact attempts (per-MB transpose of vertical edges; 64-bit word-swap transpose), both within noise, nothing kept. Don't retry deblock transposes. Skip anything `upstream PR` 883 / 884 (H.264 MC/IDCT SIMD) or 1076 (HEVC threads) cover.
+- 2026-10-12, run 2: H.264 export encoder: SATD (8/4-wide) + fixed-width MC rows, −8.9%, kept (PR 6). Don't redo SATD 16-wide in plain Rust (already near its limit).
+- **Next target in rotation:** seek / scrub latency on long-GOP MP4, then the SD->1080p scaler (CPU) and h264enc transform/quant (26% of encode).
+- **Working on `crates/h264enc` again?** `ours` already has PR 6 in `dsp.rs` and `picture.rs`, and upstream doesn't. Measure against `origin/ours`, not `upstream/main`, or the baseline misses that speed-up and the PR may conflict.
 
 ## Design notes
 
@@ -45,13 +51,18 @@ Full findings: `nightly/2026-10-12.md` → Code review and Code review (second r
 
 ## Branches
 
-**Fork layout since 2026-10-12:** `main` is a clean mirror of upstream again (fast-forward only). `ours` = upstream main plus our merged fixes (PRs 2 to 5). New PRs go against `ours`, never `main`.
+**Fork layout since 2026-10-12:** `main` is a clean mirror of upstream (fast-forward only). `ours` = upstream main plus our merged fixes (PRs 2 to 8). New PRs go against `ours`, never `main`.
+
+**Work that builds on one of our own fixes** (anything touching the lines the PRs below changed) has to start from `origin/ours`: `upstream/main` doesn't have that code. Say so in the PR.
+
+**Done locally on 2026-10-12** (a daytime session on a Windows desktop with an NVIDIA GPU, after the first night; don't redo): every merged branch below was re-read and re-tested on `ours` with `upstream/main` (0.7.0 release prep) merged in. `filmcraft-export` (111 + 1 tests), `filmcraft-h264enc` (26), `filmcraft-apv` (6, with ffmpeg 8.1.1, so the three comparisons run for real), `filmcraft-render` (189 + 3), the engine's export tests (59) and the `keyframes_ui` (16) and `export_ui` (8) UI tests all pass. Clippy from Rust 1.95 (the workspace's `rust-version`) stops on 4 lints in `crates/ui-egui` (`panels/file_dialogs.rs:134`, `panels/timeline.rs:254` and `:2399`): they are upstream's own lines, the same on `upstream/main`, and the third bug-fix run's clippy (Rust 1.97) didn't report them. `ours` was 2 commits behind `upstream/main` again by the end (the 0.7.1 release commits): the next bug-fix run merges them.
 
 | Branch | Purpose | Status |
 |---|---|---|
-| fix/upstream-1088-transform-shutter | Transform shutter blur leaked into still frames / missing on GPU path (`upstream issue 1088`) | Merged into `ours` 2026-10-12 (PR 2 = fix, PR 3 = extra GPU-plan test). Not yet upstream |
-| `fix/upstream-1088-shutter-blur-frame-edges` | Transform shutter GPU-path fix (`upstream issue 1088`), second run | Merged into `ours` 2026-10-12 (PR 2 = fix, PR 3 = extra GPU-plan test). Not yet upstream |
-| `fix/upstream-1241-select-all-keyframes` | Cmd/Ctrl+A in Effect Controls selects keyframes, not Timeline clips (`upstream issue` 1241) | Merged into `ours` 2026-10-12 (PR 4, merge commit a6e27e7). Not yet upstream; upstream candidate |
+| `fix/upstream-1088-transform-shutter` | Transform shutter blur leaked into still frames / missing on GPU path (`upstream issue` 1088) | Merged into `ours` 2026-10-12 (PR 2). **Checked on a real GPU 2026-10-12** (exports with GPU rendering on and off, 60 fps, 360° shutter): upstream 0.6.0 drops the blur with the GPU on; `ours` blurs the move, keeps the frames at rest sharp, and its GPU and CPU exports match. Not yet upstream; upstream candidate |
+| `fix/upstream-1088-shutter-blur-frame-edges` | The second run's duplicate of the fix above | Merged into `ours` 2026-10-12 (PR 3): its only extra is a test that the frame plan and the CPU render match. Not an upstream candidate |
+| `fix/upstream-1241-select-all-keyframes` | Cmd/Ctrl+A in Effect Controls selects keyframes, not Timeline clips (`upstream issue` 1241) | Merged into `ours` 2026-10-12 (PR 4). Not yet upstream; upstream candidate |
 | `fix/upstream-1249-apv-oracle-old-ffmpeg` | APV oracle tests skip instead of failing when ffmpeg < 8.0 (`upstream issue` 1249) | Merged into `ours` 2026-10-12 (PR 5). Not yet upstream; upstream candidate |
-| `perf/h264enc-satd-mc` | h264enc: faster narrow-block SATD + fixed-width MC rows, −8.9% encode, byte-identical (cloud CPU) | Merged into `ours` 2026-10-12 (PR 6, merge commit c631206) after a review and tests on a Windows desktop: 27 encoder tests pass incl. the ffmpeg comparisons, output byte-identical, CPU time -11% at 1080p and -8% at SD. Not yet upstream; upstream candidate |
-| `fix/2026-10-12-anamorphic-export-squeezed` | Exports of anamorphic sequences came out squeezed and Match Source dropped the pixel aspect (found by an end-to-end test on a Windows desktop; no upstream issue) | Merged into `ours` 2026-10-12 (PR 7, merge commit 7d0e142). 2 new export tests; 110 + 1 export and 59 engine export tests pass. Not yet upstream; upstream candidate |
+| `perf/h264enc-satd-mc` | h264enc: faster narrow-block SATD + fixed-width MC rows, byte-identical output | Merged into `ours` 2026-10-12 (PR 6). Re-measured on a 24-thread desktop (7 alternating pairs; another build was running, so it is noisy): median encode time −9% at 1080p and −13% at 720x480, every 720x480 pair faster, output the same size to the byte. Not yet upstream; upstream candidate |
+| `fix/2026-10-12-anamorphic-export-squeezed` | Exports of anamorphic sequences came out squeezed and Match Source dropped the pixel aspect (no upstream issue) | Merged into `ours` 2026-10-12 (PR 7). Not yet upstream; upstream candidate together with the branch below |
+| `fix/2026-10-12-anamorphic-export-preview` | Follow-up to PR 7: the Export dialog's preview and Summary line showed the old squeezed shape and "1.0"; AV1 (hardware-only, like H.265) keeps a matched pixel aspect in the track only | Merged into `ours` 2026-10-12 (PR 8). Branched from `ours` (it needs PR 7) |

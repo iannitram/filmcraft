@@ -4,7 +4,7 @@ Our priorities for this fork, in order. **Ian owns this file.** The nightly agen
 
 Use: editing videos for a YouTube channel. Source footage is mostly **SD DVD rips** (720x480 / 720x576, anamorphic 16:9 or 4:3 pixel aspect, 23.976 / 29.97, possibly interlaced or telecined) in **H.264 MP4**; new edits move to **H.265**. Delivery: YouTube (upscaled to 1080p, H.264 / H.265). Hardware: AMD Strix Halo laptop (Ryzen AI Max+ 395, 16 cores / 32 threads, Radeon 8060S iGPU with unified memory, Linux / SteamOS, Mesa RADV Vulkan, VA-API through radeonsi), plus an Apple-Silicon Mac.
 
-*Last changed: 2026-10-12 (after the first night: more upstream PRs to build on in item 1, a speed note in item 3, and general bugs allowed under item 4; later the same day: export shape fixed and an interlaced H.264 note in item 3).*
+*Last changed: 2026-10-12 (after the first night: more upstream PRs to build on in item 1, a speed note in item 3, and general bugs allowed under item 4; later the same day: export shape fixed and an interlaced H.264 note in item 3; then the Export dialog follow-up, fork PR 8).*
 
 ## 1. AMD / Strix Halo acceleration
 
@@ -29,7 +29,7 @@ Old Premiere projects (unknown Premiere versions; an inventory is being taken) m
 
 ## 3. SD / DVD footage done right
 
-- Pixel aspect: anamorphic 720x480 / 720x576 sources display and export at the right shape. **Export is fixed on `ours`** (2026-10-12, fork PR 7: `Geometry::new` in `crates/export/src/pipeline.rs` now uses the sequence's pixel aspect, Match Source keeps it, and it is written as `pasp`). Don't redo it. Still open: the export dialog's summary line (`ExportSettings::summary`) shows 1.0 for a Match Source export of an anamorphic sequence
+- Pixel aspect: anamorphic 720x480 / 720x576 sources display and export at the right shape. **Export is fixed on `ours`** (2026-10-12, fork PR 7: `Geometry::new` in `crates/export/src/pipeline.rs` now uses the sequence's pixel aspect, Match Source keeps it, and it is written as `pasp`). Don't redo it. The Export dialog's preview and Summary line follow it since fork PR 8 (`preview_rects` in `crates/ui-egui/src/panels/export_mode.rs`, `ExportSettings::summary_for`). Still open: the Aspect drop-down reads "Square Pixels (1.0)" when a Match Source export will keep an anamorphic sequence's pixels (a new label needs translated strings). All of this exists only on `ours`: start from `origin/ours`, not `upstream/main`
 - Interlaced and telecined sources: detect field order / telecine pattern, deinterlace and inverse telecine options
 - **On hold, don't start:** `crates/h264` can't decode interlaced-coded H.264 at all (field pictures, PAFF, MBAFF: `frame_mbs_only_flag = 0` returns unsupported; see its README and `docs/gaps.md`), so such a clip imports but is unreadable. It's a multi-night decoder project and may not be needed here. Ian decides after checking the real footage
 - SD -> 1080p upscaling quality for YouTube export (a GPU scaler)
