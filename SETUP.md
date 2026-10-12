@@ -16,4 +16,5 @@ From the FilmCraft setup check on 2026-10-12 (Default Cloud Environment), plus t
 | Waiting | Never start a long build in the background and end the turn to wait: nothing wakes an unattended run. Run builds and tests in the foreground with a long timeout (<= 600000 ms), split per package |
 | Build timings | 2026-10-12 bug-fix pass (cloud CPU, release): `cargo test --release -p filmcraft-render` cold build + run 2 min 50 s; warm incremental re-test ~1 min 50 s; `cargo clippy --release -p filmcraft-render -p filmcraft-gpu --all-targets` warm 39 s; `cargo test --release -p filmcraft-gpu` 2 min 47 s (34 tests on lavapipe) |
 | Issue list | `gh api 'repos/storytold/filmcraft/issues?...' --paginate` fails on page 2 (proxy refuses numeric-ID URLs): add `&page=2` by hand |
+| Build timings (second run) | Cloud CPU, 2026-10-12: release build of `filmcraft-cli` from cold 6 min 01 s; `clippy -p filmcraft-render` (warm) 21 s; all `filmcraft-render` tests (release, warm) 2 min 15 s |
 | Attachments | Images on github.com/user-attachments can't be downloaded from the sandbox |
