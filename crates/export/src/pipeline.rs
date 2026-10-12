@@ -28,13 +28,17 @@ pub(crate) struct Geometry {
 }
 
 impl Geometry {
-    pub fn new(settings: &ExportSettings, seq_w: u32, seq_h: u32, w: u32, h: u32) -> Self {
+    /// `seq_par` is the sequence's own pixel aspect: the picture is fitted by the shape it is shown
+    /// at (720x480 with 32:27 pixels is 16:9), not by its stored width.
+    pub fn new(settings: &ExportSettings, seq_w: u32, seq_h: u32, seq_par: (u32, u32), w: u32, h: u32) -> Self {
         let (sw, sh) = (seq_w.max(1) as f32, seq_h.max(1) as f32);
         if settings.frame_size.is_none() && settings.pixel_aspect.is_none() && !settings.max_render_quality {
             // the sequence size times `scale`, rendered directly (even-size crop/pad at the edge)
             return Geometry { w, h, render_scale: w as f32 / sw, content: None, offset: (0, 0) };
         }
-        let par = settings.pixel_aspect.map(|(n, d)| n.max(1) as f32 / d.max(1) as f32).unwrap_or(1.0);
+        // the width of an output pixel in sequence pixels (1 when both have the same pixels)
+        let (n, d) = settings.output_pixel_aspect(seq_par);
+        let par = (n.max(1) as f32 / d.max(1) as f32) / filmcraft_project::par_ratio(seq_par) as f32;
         let disp_w = w as f32 * par;
         let (fx, fy) = (disp_w / sw, h as f32 / sh);
         let (sx, sy) = match settings.scaling {
@@ -152,7 +156,7 @@ impl Pipeline {
         settings.validate()?;
         let r = settings.resolve(q.settings.width, q.settings.height, q.settings.frame_rate, q.settings.sample_rate);
         filmcraft_project::validate_frame_size(r.width, r.height).map_err(ExportError::Unsupported)?;
-        let geom = Geometry::new(settings, q.settings.width, q.settings.height, r.width, r.height);
+        let geom = Geometry::new(settings, q.settings.width, q.settings.height, q.settings.par, r.width, r.height);
         if let Some((w, h)) = geom.content {
             let w = u32::try_from(w).map_err(|_| ExportError::Unsupported("scaled picture width is too large".into()))?;
             let h = u32::try_from(h).map_err(|_| ExportError::Unsupported("scaled picture height is too large".into()))?;
