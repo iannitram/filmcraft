@@ -47,6 +47,9 @@ pub struct Mp4Source {
     bytes: crate::Src,
     file: Mp4File,
     vtrack: Option<usize>,
+    /// The unit the video track's time stamps were rounded to, in track units ([`stamp_grid`]);
+    /// 1 when they were not rounded on anything coarser than the track's own clock.
+    video_grid: i64,
     video: GopCache,
     /// The playable audio tracks in file order: `info.audio_streams[k]` describes `audios[k]`.
     audios: Vec<Mp4Audio>,
@@ -375,7 +378,8 @@ impl Mp4Source {
             .collect();
         rebase_unedited_video(&mut file, vtrack, &mut audios);
         start_edit_at_first_picture(&mut file, vtrack);
-        Ok(Self { info, bytes, file, vtrack, video: GopCache::new(explicit_color).with_rotation(rotation).with_crop(aperture), audios })
+        let video_grid = vtrack.and_then(|vi| file.tracks.get(vi)).map_or(1, stamp_grid);
+        Ok(Self { info, bytes, file, vtrack, video_grid, video: GopCache::new(explicit_color).with_rotation(rotation).with_crop(aperture), audios })
     }
 
     fn read(&self, track: usize, i: usize) -> crate::Result<Vec<u8>> {
@@ -460,7 +464,8 @@ impl VideoSamples for Mp4Video<'_> {
         self.src.file.tracks[self.track].sync_sample_before(i)
     }
     fn sample_at(&self, t: i64) -> Option<usize> {
-        self.src.file.tracks[self.track].sample_at_presentation_time(t)
+        let track = &self.src.file.tracks[self.track];
+        track.sample_at_presentation_time(snap_to_grid(t, track.edit_offset, self.src.video_grid))
     }
     fn read(&self, i: usize) -> crate::Result<Vec<u8>> {
         self.src.read(self.track, i)
@@ -746,6 +751,52 @@ fn start_edit_at_first_picture(file: &mut Mp4File, vtrack: Option<usize>) {
     if start >= 0 && gap > 0 && gap <= delay {
         t.edit_offset = t.edit_offset.saturating_sub(gap);
     }
+}
+
+/// The unit a video track's time stamps were rounded to, in track units, when that unit is
+/// coarser than the track's own clock and much finer than a frame; 1 otherwise.
+///
+/// A remux from Matroska, or an encoder that keeps time in milliseconds, writes an MP4 whose track
+/// runs at 90 kHz while every stamp is a whole millisecond: 23.976 fps becomes frames of 3780 and
+/// 3690 units. A frame asked for at its exact start (3753.75 units a frame) then falls just short
+/// of every picture whose stamp was rounded up, and the picture before it was shown instead:
+/// about every other frame of such a file. Rounding the request to the track's unit, which is
+/// what cures a 1 ms track clock, does nothing here: the stamps were rounded on a coarser one.
+///
+/// The unit is the largest that divides every stamp. A file with exact stamps has its whole frame
+/// as that unit (or 1) and is left alone: only a unit of an eighth of the shortest frame or less
+/// counts, so a request is never moved by more than a sixteenth of a frame.
+fn stamp_grid(t: &filmcraft_isobmff::Track) -> i64 {
+    let mut unit = 0u64;
+    let mut shortest = u64::MAX;
+    for s in &t.samples {
+        let (mut a, mut b) = (unit, s.pts.unsigned_abs());
+        while b != 0 {
+            (a, b) = (b, a % b);
+        }
+        unit = a;
+        if unit == 1 {
+            return 1;
+        }
+        if s.duration > 0 {
+            shortest = shortest.min(u64::from(s.duration));
+        }
+    }
+    match i64::try_from(unit) {
+        Ok(unit) if unit > 1 && shortest != u64::MAX && unit.unsigned_abs().saturating_mul(8) <= shortest => unit,
+        _ => 1,
+    }
+}
+
+/// The presentation time `t` (track units) moved to the nearest stamp unit `grid` of the media
+/// timeline, halves upward, as the writer rounded the stamps. `offset` is the track's edit offset
+/// (presentation = media + offset).
+fn snap_to_grid(t: i64, offset: i64, grid: i64) -> i64 {
+    if grid <= 1 {
+        return t;
+    }
+    let media = t.saturating_sub(offset);
+    media.saturating_add(grid / 2).div_euclid(grid).saturating_mul(grid).saturating_add(offset)
 }
 
 /// How long a track plays. With an edit list that is the sum of its edits (ISO/IEC 14496-12
