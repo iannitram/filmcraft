@@ -1389,3 +1389,39 @@ fn premiere_colour_matte_and_black_video_are_generators() {
         assert!(report.to_string().contains("offline placeholder"), "{prefs}");
     }
 }
+
+/// A title laid out for pixels that are not square says so (`pSCREENAR`, one over the pixel
+/// aspect). In a sequence of the same pixels its letters are drawn that much narrower, so they
+/// have their shape when the frame is shown, and every line stays where it was. In a sequence of
+/// square pixels the letters are as they are and the title is that much wider about the middle.
+#[test]
+fn premiere_legacy_title_for_widescreen_pixels_keeps_its_shape() {
+    use filmcraft_project::ParamValue;
+    let document =
+        LEGACY_TITLE.replace("<pXPIXELS>1280</pXPIXELS><pYLINES>720</pYLINES>", "<pXPIXELS>720</pXPIXELS><pYLINES>480</pYLINES><pSCREENAR>0.825</pSCREENAR>");
+    assert_ne!(document, LEGACY_TITLE);
+    let prefs = format!("<ImporterPrefs Encoding=\"base64\">{}</ImporterPrefs>", base64(&legacy_title_prefs(&document)));
+    let first_layer = |xml: &str| {
+        let (imported, _) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+        let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+        video.graphic_layers().next().expect("a text layer").clone()
+    };
+    // the same pixels as the title's: a 720x480 widescreen sequence (40:33)
+    let same = project_with_legacy_title(&prefs).replace(
+        "<VideoTrackGroup ObjectID=\"30\"><FrameRect>0,0,1920,1080</FrameRect>",
+        "<VideoTrackGroup ObjectID=\"30\"><FrameRect>0,0,720,480</FrameRect><PixelAspectRatio>40,33</PixelAspectRatio>",
+    );
+    assert!(same.contains("40,33"));
+    let layer = first_layer(&same);
+    let place = layer.vec2_at("position", Tick::ZERO);
+    assert!((place.x - 400.0).abs() < 0.01 && (place.y - 360.0).abs() < 0.01, "where the title has it: {place:?}");
+    assert!(matches!(layer.param("uniform_scale").unwrap().value, ParamValue::Bool(false)));
+    assert!((layer.f64_at("scale_width", Tick::ZERO) - 82.5).abs() < 0.01, "{}", layer.f64_at("scale_width", Tick::ZERO));
+    assert_eq!(layer.f64_at("scale", Tick::ZERO), 100.0);
+    // square pixels, 1920x1080: the title's picture is 1.2121 times as wide about the middle
+    let layer = first_layer(&project_with_legacy_title(&prefs));
+    let place = layer.vec2_at("position", Tick::ZERO);
+    let want = 960.0 + (400.0 - 360.0) / 0.825;
+    assert!((place.x - want).abs() < 0.01 && (place.y - (360.0 + 300.0)).abs() < 0.01, "{place:?} against {want}");
+    assert!(matches!(layer.param("uniform_scale").unwrap().value, ParamValue::Bool(true)), "letters as they are");
+}
