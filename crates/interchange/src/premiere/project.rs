@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use filmcraft_media::{Generator, MediaKind};
-use filmcraft_project::{BinId, ItemId, ItemKind, Label, SequenceSettings, TrackKind, Transition, TransitionAlign, TransitionId, find_effect};
+use filmcraft_project::{
+    BinId, ItemId, ItemKind, Label, Param, ParamValue, SequenceSettings, TrackKind, Transition, TransitionAlign, TransitionId, find_effect,
+};
 use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick};
 use roxmltree::Node;
 
@@ -533,6 +535,15 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
             "AE.ADBE Dip To White" | "ADBE Dip To White" => "dip_to_white",
             "ADBE Additive Dissolve" => "additive_dissolve",
             "ADBE Film Dissolve" => "film_dissolve",
+            // transitions FilmCraft has under the same name; of their controls only the edge a
+            // slide or a wipe comes from is carried over (below)
+            "ADBE Slide" => "slide",
+            "ADBE Wipe" => "wipe",
+            "ADBE Split" => "split",
+            "ADBE Flip Over" => "flip_over",
+            "ADBE Page Turn" => "page_turn",
+            "ADBE Cross Zoom" => "cross_zoom",
+            "AE.ADBE MorphCut" => "morph_cut",
             "Constant Power" => "constant_power",
             "Constant Gain" => "constant_gain",
             "Exponential Fade" => "exponential_fade",
@@ -547,7 +558,22 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                 return Ok(None);
             }
         };
-        let Some(effect) = find_effect(effect).map(|d| d.instance()) else { return Ok(None) };
+        let Some(mut effect) = find_effect(effect).map(|d| d.instance()) else { return Ok(None) };
+        // The edge a slide or a wipe comes from. The file has one bit for each edge and corner
+        // (top 1, right 2, bottom 4, left 8, then the corners); FilmCraft's have the four edges.
+        if let Some(param) = effect.params.get_mut("direction")
+            && let Some(edge) = child_text(node, "Direction").and_then(|v| v.trim().parse::<u32>().ok())
+        {
+            match edge {
+                1 => *param = Param::new(ParamValue::Choice(0)),
+                2 => *param = Param::new(ParamValue::Choice(1)),
+                4 => *param = Param::new(ParamValue::Choice(2)),
+                8 => *param = Param::new(ParamValue::Choice(3)),
+                _ => self.report.warn(format!(
+                    "Premiere transition \"{name}\" comes from a corner or has no direction FilmCraft has; its direction was left at FilmCraft's default"
+                )),
+            }
+        }
         let start = self.graph.required_integer(node, &["TransitionTrackItem", "TrackItem", "Start"])?;
         let end = self.graph.required_integer(node, &["TransitionTrackItem", "TrackItem", "End"])?;
         let duration = end.checked_sub(start).filter(|d| start >= 0 && *d > 0).ok_or_else(|| error(PROJECT, "invalid transition range"))?;
