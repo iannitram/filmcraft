@@ -26,6 +26,7 @@ pub fn import_project(bytes: &[u8], opts: &ImportOptions) -> Result<(Imported, R
         sequences: HashMap::new(),
         leaves: Vec::new(),
         nesting: HashMap::new(),
+        generated: HashSet::new(),
         report: &mut report,
     };
     let project = elements(importer.graph.root)
@@ -77,6 +78,8 @@ struct Importer<'a, 'i, 'o, 'r> {
     sequences: HashMap<String, ItemId>,
     leaves: Vec<(Node<'a, 'i>, Option<BinId>)>,
     nesting: HashMap<ItemId, Vec<ItemId>>,
+    /// Sources made inside the application (graphics, titles, mattes): there is no file behind them.
+    generated: HashSet<ItemId>,
     report: &'r mut Report,
 }
 
@@ -162,6 +165,15 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
         let Some(path) = path else { return Ok(self.offline_source(&media_key, name, "generated or missing media", bin)) };
         if path.contains('\0') {
             return Err(error(PROJECT, "media path contains a NUL character"));
+        }
+        // A graphic, title or matte made inside the application has a number where a path
+        // belongs (its generator's four-character code) and no file anywhere: resolving that as a
+        // file name would send Link Media looking for a file that never existed.
+        if !path.trim().is_empty() && path.trim().bytes().all(|b| b.is_ascii_digit()) {
+            let kind = child_text(media, "Title").filter(|t| !t.is_empty()).unwrap_or("generated media");
+            let id = self.offline_source(&media_key, name, &shortened(kind, 120), bin);
+            self.generated.insert(id);
+            return Ok(id);
         }
         let path = resolve_path(path, self.opts.base_dir.as_deref());
         let mut spec = MediaSpec { kind: Some(kind_from_ext(&path)), ..Default::default() };
@@ -322,6 +334,12 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                                 effects::put_effect(&mut imported.effects, effect);
                             }
                         }
+                    }
+                    // An offline placeholder on an upper track would cover the picture under it
+                    // for as long as the title lasted: keep the clip where it is, switched off.
+                    if self.generated.contains(&source_item) {
+                        imported.enabled = false;
+                        self.report.warn("Premiere clips of graphics, titles or mattes made inside Premiere are kept on the timeline switched off; their content is not imported");
                     }
                     clip_ids.insert(key(item), imported.id);
                     imported_track.items.push(imported);

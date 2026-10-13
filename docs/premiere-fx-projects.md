@@ -42,6 +42,9 @@ Mapped native components:
 | `AE.ADBE Offset` | Offset |
 | `AE.ADBE Motion Blur` | Directional Blur |
 | `AE.ADBE Gaussian Blur 2` | Gaussian Blur; unmapped controls are reported |
+| `AE.ADBE Horizontal Flip`, `PR.ADBE Horizontal Flip` | Horizontal Flip |
+| `AE.ADBE Vertical Flip`, `PR.ADBE Vertical Flip` | Vertical Flip |
+| `AE.ADBE Black & White`, `PR.ADBE Black & White` | Black & White |
 | `Internal Volume Mono/Stereo` | Volume, converting linear gain to dB |
 | `AE.ADBE Cross Dissolve New` with `TransitionDuration` | Cross Dissolve transition preset |
 
