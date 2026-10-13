@@ -405,7 +405,7 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                         && kind == TrackKind::Video
                         && let Some(title) = self.titles.get(&source_item)
                     {
-                        layers = title.layers_in(sequence_size);
+                        layers = title.layers_in(sequence_size, sequence.settings.par);
                     }
                     // An offline placeholder on an upper track would cover the picture under it
                     // for as long as the title lasted: keep the clip where it is, switched off.
