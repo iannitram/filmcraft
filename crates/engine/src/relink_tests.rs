@@ -9,7 +9,7 @@ use serde_json::json;
 
 use crate::Session;
 use crate::media_test_util::{frame_rgba, make_movie, psnr, session_with, tmp_dir};
-use crate::relink::{apply_remap, derive_remap};
+use crate::relink::{apply_remap, derive_remap, episode_number};
 
 const W: u32 = 160;
 const H: u32 = 90;
@@ -403,5 +403,113 @@ fn compressed_sound_may_be_a_fraction_of_a_second_off_and_uncompressed_may_not()
     let pcm = imported_then_recorded_elsewhere(&mut s, &wav, off_by(0.2));
     let e = relink(&mut s, pcm, &wav).unwrap_err().to_string();
     assert!(e.contains("duration differs"), "uncompressed sound is exact: {e}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn episode_numbers_are_read_from_file_names() {
+    for (name, want) in [
+        ("Show - 1x04 - A Title.avi", Some((1, 4))),
+        ("Show the Series - s01e04 - A Title.mp4", Some((1, 4))),
+        ("show.S01E04.mkv", Some((1, 4))),
+        ("Show s1e4.mov", Some((1, 4))),
+        ("10x22.avi", Some((10, 22))),
+        ("Show - S07E116.mp4", Some((7, 116))),
+        // sizes, ratios and words that only look like a number
+        ("clip 720x480.mov", None),
+        ("1920x1080.mp4", None),
+        ("16x9 test.mov", None),
+        ("Shot1x02.mov", None),
+        ("interview.mov", None),
+        ("s.mov", None),
+        ("", None),
+    ] {
+        assert_eq!(episode_number(name), want, "{name}");
+    }
+}
+
+/// An old project points at `Show - 1x04 - A Title.mov`, which is nowhere; the library has the
+/// episode as `Show the Series - s01e04 - A Title.mov`. Neither a folder mapping nor a search by
+/// name finds that. The suggestion does, by the show's first word and the numbers, says how the
+/// lengths compare, and links nothing: a person confirms it.
+#[test]
+fn a_renamed_episode_is_suggested_by_its_number_and_never_linked() {
+    let root = tmp_dir("relink-episodes");
+    let lib = root.join("Library").join("Season 1");
+    let old = root.join("Old");
+    std::fs::create_dir_all(&lib).unwrap();
+    std::fs::create_dir_all(&old).unwrap();
+    // what is there now: episode 4 one frame longer than it was, episode 5 as another cut (a
+    // second and a half longer), another show's episode 4, and a subtitle file named like episode 4
+    let new4 = lib.join("Show the Series - s01e04 - A Title.mov");
+    let new5 = lib.join("Show the Series - s01e05 - Another.mov");
+    make_movie(&new4, DemoScene::Aurora, W, H, 13);
+    make_movie(&new5, DemoScene::CityNight, W, H, 48);
+    make_movie(&lib.join("Elsewhere - s01e04 - A Title.mov"), DemoScene::Aurora, W, H, 12);
+    std::fs::write(lib.join("Show the Series - s01e04 - A Title.srt"), "1").unwrap();
+    // what the old project recorded: twelve frames each, under the old names, somewhere else
+    let (old4, old5, plain) = (old.join("Show - 1x04 - A Title.mov"), old.join("Show - 1x05 - Another.mov"), old.join("interview.mov"));
+    for f in [&old4, &old5, &plain] {
+        make_movie(f, DemoScene::Aurora, W, H, 12);
+    }
+    let mut s = Session::default();
+    let i4 = imported_then_recorded_elsewhere(&mut s, &old4, |_| {});
+    let i5 = imported_then_recorded_elsewhere(&mut s, &old5, |_| {});
+    imported_then_recorded_elsewhere(&mut s, &plain, |_| {});
+    let missing = |s: &mut Session| s.execute("media.findMissing", json!({})).unwrap()["missing"].as_array().unwrap().len();
+    assert_eq!(missing(&mut s), 3);
+
+    let library = root.join("Library").to_string_lossy().into_owned();
+    let r = s.execute("media.relinkSuggest", json!({"folder": library})).unwrap();
+    assert_eq!(r["linked"], json!(0), "{r}");
+    assert_eq!(r["withoutEpisodeNumber"], json!(1), "{r}");
+    assert_eq!(missing(&mut s), 3, "a suggestion links nothing");
+    let rows = r["suggestions"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{r}");
+    let row = |item: ItemId| rows.iter().find(|x| x["item"] == json!(item.0)).unwrap_or_else(|| panic!("no row for {}: {r}", item.0));
+
+    let four = row(i4);
+    assert_eq!((&four["season"], &four["episode"]), (&json!(1), &json!(4)), "{four}");
+    let offered = four["candidates"].as_array().unwrap();
+    assert_eq!(offered.len(), 1, "the same show's episode 4, not the other show's and not the subtitles: {four}");
+    assert_eq!(offered[0]["path"], json!(new4.to_string_lossy()), "{four}");
+    assert_eq!(offered[0]["differenceFrames"], json!(1), "{four}");
+    assert_eq!(four["otherCuts"], json!([]), "{four}");
+
+    let five = row(i5);
+    assert_eq!(five["candidates"], json!([]), "a second and a half longer is another cut: {five}");
+    assert_eq!(five["otherCuts"][0]["path"], json!(new5.to_string_lossy()), "{five}");
+    assert_eq!(five["otherCuts"][0]["differenceFrames"], json!(36), "{five}");
+
+    // one item only
+    let one = s.execute("media.relinkSuggest", json!({"folder": library, "item": i5.0})).unwrap();
+    assert_eq!(one["suggestions"].as_array().unwrap().len(), 1, "{one}");
+    // the person confirms episode 4: a link like any other, forced because the name differs
+    let path = offered[0]["path"].as_str().unwrap();
+    let done = s.execute("media.relink", json!({"item": i4.0, "path": path, "force": true, "relinkOthers": false})).unwrap();
+    assert_eq!(done["relinked"].as_array().unwrap().len(), 1, "{done}");
+    assert_eq!(missing(&mut s), 2);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn hostile_relink_suggest_parameters_are_errors_or_empty() {
+    let root = tmp_dir("relink-episodes-hostile");
+    let old = root.join("Show - 1x04 - A Title.mov");
+    make_movie(&old, DemoScene::Aurora, W, H, 12);
+    let mut s = Session::default();
+    let item = imported_then_recorded_elsewhere(&mut s, &old, |info| info.duration = filmcraft_time::Tick::ZERO);
+    assert!(s.execute("media.relinkSuggest", json!({})).is_err());
+    assert!(s.execute("media.relinkSuggest", json!({"folder": 42})).is_err());
+    // a folder that is not there, and an item that is not there: nothing to suggest
+    let nowhere = root.join("no such folder").to_string_lossy().into_owned();
+    let r = s.execute("media.relinkSuggest", json!({"folder": nowhere})).unwrap();
+    assert_eq!(r["suggestions"][0]["candidates"], json!([]), "{r}");
+    let r = s.execute("media.relinkSuggest", json!({"folder": nowhere, "item": u64::MAX})).unwrap();
+    assert_eq!(r["suggestions"], json!([]), "{r}");
+    // a recording without a length can't call anything the same cut, however alike the names
+    let r = s.execute("media.relinkSuggest", json!({"folder": root.to_string_lossy(), "item": item.0})).unwrap();
+    assert_eq!(r["suggestions"][0]["candidates"], json!([]), "{r}");
+    assert_eq!(r["suggestions"][0]["otherCuts"].as_array().unwrap().len(), 1, "{r}");
     let _ = std::fs::remove_dir_all(&root);
 }
