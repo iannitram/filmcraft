@@ -1,8 +1,9 @@
 //! Text layers of graphics made inside the application: the `AE.ADBE Text` component.
 //!
 //! Observed in user-authored project files: the component's first parameter, Source Text, holds
-//! base64 of an 8-byte header (the byte length of what follows as a little-endian number, then
-//! zeros) and then the text in one of two forms.
+//! base64 of an 8-byte header (a byte length as a little-endian number, then zeros) and then the
+//! text in one of two forms. The length is that of everything after the header in the first
+//! form, and of what follows the marker in the second.
 //!
 //! - Project versions 34 to 38: a JSON document in UTF-16LE. Its `mTextParam` object names the
 //!   text, the font (by PostScript name), the size, alignment, fill, stroke and shadow; the style
@@ -237,13 +238,11 @@ fn source_text(base64: &str) -> Option<Value> {
     let bytes = decode_base64(base64)?;
     let body = bytes.get(8..)?;
     let declared = u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?) as usize;
-    if declared != body.len() {
-        return None;
-    }
+    // the binary form counts what follows its marker, the JSON form everything after the header
     if let Some(tables) = body.strip_prefix(&binary::MARKER) {
-        return binary::document(tables);
+        return if declared == tables.len() { binary::document(tables) } else { None };
     }
-    if body.len() % 2 != 0 {
+    if declared != body.len() || body.len() % 2 != 0 {
         return None;
     }
     let units: Vec<u16> = body.as_chunks::<2>().0.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
