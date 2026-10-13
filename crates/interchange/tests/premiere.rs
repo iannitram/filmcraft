@@ -899,3 +899,28 @@ fn premiere_vector_motion_becomes_a_transform_effect() {
     assert!(matches!(transform.param("uniform_scale").unwrap().value, filmcraft_project::ParamValue::Bool(true)));
     assert!(video.effect("motion").is_some());
 }
+
+/// A file writes each distinct Source Text in full once. The same text on a later clip is an
+/// empty element that names the first by its hash.
+#[test]
+fn premiere_text_written_once_is_found_by_its_hash() {
+    let full = project_with_text_layer(&source_text_json(TITLE_JSON));
+    let value = base64(&source_text_json(TITLE_JSON));
+    let xml = full.replace(&format!("<StartKeyframeValue Encoding=\"base64\">{value}</StartKeyframeValue>"), "<StartKeyframeValue Encoding=\"base64\" BinaryHash=\"example-hash\"/>").replace(
+        "</PremiereData>",
+        &format!(
+            "<ArbVideoComponentParam ObjectID=\"95\"><StartKeyframeValue Encoding=\"base64\" BinaryHash=\"example-hash\">{value}</StartKeyframeValue></ArbVideoComponentParam></PremiereData>"
+        ),
+    );
+    assert_eq!(xml.matches("example-hash").count(), 2);
+    let (imported, _) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+    let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+    assert!(video.enabled);
+    assert_eq!(video.graphic_layers().count(), 1);
+
+    // a hash that nothing in the file carries the value of: there is no text to read
+    let lost = xml.replace("BinaryHash=\"example-hash\">", "BinaryHash=\"another-hash\">");
+    assert_ne!(lost, xml);
+    let (imported, _) = premiere::import_project(lost.as_bytes(), &ImportOptions::default()).unwrap();
+    assert!(!imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0].enabled);
+}

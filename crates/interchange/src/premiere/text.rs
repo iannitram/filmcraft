@@ -8,6 +8,11 @@
 //! Source Text are the layer's own position (normalised to the sequence frame), scale, rotation
 //! and opacity. Newer versions write Source Text in a binary form that is not read here: such a
 //! layer is reported and left out, as before.
+//!
+//! A file writes each distinct binary value once: a later parameter holding the same value has
+//! an empty element that names it by its `BinaryHash` attribute ([`shared_values`]).
+
+use std::collections::HashMap;
 
 use filmcraft_project::graphic::{ALIGN_OPTS, CAPS_OPTS, TEXT_LAYER};
 use filmcraft_project::{EffectInstance, Param, ParamValue, find_effect};
@@ -17,7 +22,6 @@ use serde_json::Value;
 
 use super::effects::{Conversion, parameter};
 use super::graph::Graph;
-use crate::xml::child_text;
 use crate::{Report, Result};
 
 pub(super) const MATCH_NAME: &str = "AE.ADBE Text";
@@ -26,8 +30,16 @@ pub(super) const MATCH_NAME: &str = "AE.ADBE Text";
 const MAX_SOURCE_TEXT_BASE64: usize = 4 << 20;
 
 /// The FilmCraft text layer for one `AE.ADBE Text` component, or `None` when its text cannot be
-/// read (the caller reports it). Keyframe times are taken relative to `origin`.
-pub(super) fn layer(graph: &Graph<'_, '_>, node: Node<'_, '_>, origin: Tick, sequence_size: (u32, u32), report: &mut Report) -> Result<Option<EffectInstance>> {
+/// read (the caller reports it). Keyframe times are taken relative to `origin`; `shared` is the
+/// document's [`shared_values`].
+pub(super) fn layer(
+    graph: &Graph<'_, '_>,
+    node: Node<'_, '_>,
+    origin: Tick,
+    sequence_size: (u32, u32),
+    shared: &HashMap<&str, &str>,
+    report: &mut Report,
+) -> Result<Option<EffectInstance>> {
     let Some(def) = find_effect(TEXT_LAYER) else { return Ok(None) };
     let parameters = graph.references(node, &["Component", "Params"])?;
     let mut source = None;
@@ -37,7 +49,10 @@ pub(super) fn layer(graph: &Graph<'_, '_>, node: Node<'_, '_>, origin: Tick, seq
         }
     }
     let Some(source) = source else { return Ok(None) };
-    let Some(document) = child_text(source, "StartKeyframeValue").and_then(source_text) else { return Ok(None) };
+    let encoded = source.children().find(|n| n.has_tag_name("StartKeyframeValue")).and_then(|value| {
+        value.text().filter(|text| !text.trim().is_empty()).or_else(|| value.attribute("BinaryHash").and_then(|hash| shared.get(hash).copied()))
+    });
+    let Some(document) = encoded.and_then(source_text) else { return Ok(None) };
     let Some(text_param) = document.get("mTextParam") else { return Ok(None) };
     let sheet = text_param.get("mStyleSheet").unwrap_or(&Value::Null);
     let Some(text) = sheet.get("mText").and_then(Value::as_str) else { return Ok(None) };
@@ -176,6 +191,21 @@ pub(super) fn layer(graph: &Graph<'_, '_>, node: Node<'_, '_>, origin: Tick, seq
         }
     }
     Ok(Some(layer))
+}
+
+/// The binary parameter values of a document by their `BinaryHash`: the file writes a value in
+/// full the first time and leaves the element empty, with the same hash, every time after.
+pub(super) fn shared_values<'a>(root: Node<'a, '_>) -> HashMap<&'a str, &'a str> {
+    let mut values = HashMap::new();
+    for node in root.descendants() {
+        if node.has_tag_name("StartKeyframeValue")
+            && let Some(hash) = node.attribute("BinaryHash")
+            && let Some(text) = node.text().filter(|text| !text.trim().is_empty())
+        {
+            values.entry(hash).or_insert(text);
+        }
+    }
+    values
 }
 
 /// A style value: its first run's. `mixed` is set when a later run differs (more than one style
