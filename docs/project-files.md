@@ -273,6 +273,7 @@ have no identity, so relinking them skips the fingerprint check.
 | `media.relink {item, path, force?, relinkOthers?=true, alignTimecode?, match?}` | check, link, then the others |
 | `media.autoRelink {from, to}` / `{folder}` | batch relink: a folder-prefix remap, or a search of a folder tree |
 | `media.search {folder, item?, exactName?=true}` | ranked candidates with `ok`, `identityMatch`, `problems` |
+| `media.relinkSuggest {folder, item?}` | renamed episodes: for each missing file named with a season and episode (`1x04`, `s01e04`), the folder's video files of the same show word and numbers, with `seconds`, `differenceSeconds`, `differenceFrames`; more than a second apart goes under `otherCuts`. Links nothing: confirm each with `media.relink` + `force` |
 | `media.replaceFootage {item, path}` | relink without checks (Replace Footage) |
 | `media.offlineAll` | close the dialog and leave the rest offline |
 

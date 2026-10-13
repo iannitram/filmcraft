@@ -11,6 +11,8 @@
 //! - **Relink others automatically.** Linking one file derives a folder remap (the old path's
 //!   prefix → the new one) and applies it to every other missing file, checking each one.
 //! - **Search.** [`search`] walks a folder for files named like the missing ones.
+//! - **Renamed episodes.** [`relink_suggest`] finds the same show's same season and episode under
+//!   another name and reports the lengths. It only suggests: nothing is linked without a person.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -553,6 +555,112 @@ pub fn search(s: &Session, p: &Value) -> Result<Value> {
     Ok(json!({"results": out}))
 }
 
+/// Season and episode a file name carries: `1x04`, `s01e04`, `S1E4`. The season is one or two
+/// digits; the `x` form needs a two- or three-digit episode, so a frame size or an aspect ratio in
+/// a name (`720x480`, `16x9`) is not an episode. The first such group in the name counts.
+pub fn episode_number(name: &str) -> Option<(u32, u32)> {
+    let b = name.as_bytes();
+    let digits = |from: usize| b.get(from..).map_or(0, |r| r.iter().take_while(|c| c.is_ascii_digit()).count());
+    let number = |from: usize, len: usize| name.get(from..from + len).and_then(|s| s.parse::<u32>().ok());
+    for i in 0..b.len() {
+        // a group starts where no letter or digit runs into it
+        if i > 0 && b.get(i - 1).is_some_and(|c| c.is_ascii_alphanumeric()) {
+            continue;
+        }
+        let (season_at, sep) = if b.get(i).is_some_and(|c| c.eq_ignore_ascii_case(&b's')) { (i + 1, b'e') } else { (i, b'x') };
+        let sl = digits(season_at);
+        if !(1..=2).contains(&sl) || !b.get(season_at + sl).is_some_and(|c| c.eq_ignore_ascii_case(&sep)) {
+            continue;
+        }
+        let el = digits(season_at + sl + 1);
+        let enough = if sep == b'x' { (2..=3).contains(&el) } else { (1..=3).contains(&el) };
+        if !enough {
+            continue;
+        }
+        if let (Some(s), Some(e)) = (number(season_at, sl), number(season_at + sl + 1, el)) {
+            return Some((s, e));
+        }
+    }
+    None
+}
+
+/// The first word of a file name, lower case: what `Show - 1x04 - Title.avi` and
+/// `Show the Series - s01e04 - Title.mp4` have in common.
+fn first_word(name: &str) -> String {
+    name.chars().skip_while(|c| !c.is_alphanumeric()).take_while(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+}
+
+/// How far a file's length may be from the recorded one and still be offered as the same cut of
+/// an episode. Re-encodes of one master differ by a frame or three; another rip or another edit of
+/// the episode differs by many seconds.
+const SAME_CUT_SLACK: Tick = Tick(filmcraft_time::TICKS_PER_SECOND);
+
+/// `media.relinkSuggest {folder, item?}`: for each missing file whose name carries a season and
+/// episode number, the video files under `folder` that are the same show's same episode under
+/// another name (same first word, same numbers, any video extension), each with its length against
+/// the recorded one. It links nothing: a renamed, re-encoded episode can't be told from another
+/// cut of it by its name, so each suggestion is for a person to confirm, with
+/// `media.relink {item, path, force: true, relinkOthers: false}`. A candidate more than a second
+/// longer or shorter than the recording is listed under `otherCuts`, not offered.
+pub fn relink_suggest(s: &Session, p: &Value) -> Result<Value> {
+    let folder = str_p(p, "folder").ok_or_else(|| bad("media.relinkSuggest", "need `folder`"))?;
+    let only = u64_p(p, "item");
+    let missing: Vec<Missing> = scan(&s.project, &*s.services).into_iter().filter(|m| m.status == "missing" && only.is_none_or(|i| i == m.item)).collect();
+    // the folder's video files by show word, season and episode
+    let mut episodes: BTreeMap<(String, u32, u32), Vec<PathBuf>> = BTreeMap::new();
+    for (name, paths) in index_folder(Path::new(folder), 20_000) {
+        let (_, ext) = split_ext(&name);
+        if !filmcraft_media::VIDEO_EXTENSIONS.contains(&ext) {
+            continue;
+        }
+        if let Some((season, episode)) = episode_number(&name) {
+            episodes.entry((first_word(&name), season, episode)).or_default().extend(paths);
+        }
+    }
+    let mut opened: BTreeMap<PathBuf, Option<MediaInfo>> = BTreeMap::new();
+    let mut out = Vec::new();
+    let mut unnumbered = 0usize;
+    for m in &missing {
+        let Some((season, episode)) = episode_number(&m.file_name) else {
+            unnumbered += 1;
+            continue;
+        };
+        let recorded = Tick(m.duration);
+        let frame = s.project.item(ItemId(m.item)).and_then(|i| i.as_media()).map_or(Tick::ZERO, |mi| mi.info.frame_rate().frame_duration());
+        let (mut same, mut other) = (Vec::new(), Vec::new());
+        for path in episodes.get(&(first_word(&m.file_name), season, episode)).into_iter().flatten().take(32) {
+            let text = path.to_string_lossy().into_owned();
+            let info = opened.entry(path.clone()).or_insert_with(|| s.media.open_file(&text, &*s.services).ok().map(|src| src.info().clone()));
+            let Some(info) = info else { continue };
+            let diff = info.duration - recorded;
+            let mut row = json!({
+                "path": text,
+                "seconds": info.duration.seconds(),
+                "differenceSeconds": diff.seconds(),
+                "video": info.video.as_ref().map(|v| format!("{}×{} {}", v.width, v.height, v.frame_rate.label())),
+            });
+            if frame > Tick::ZERO {
+                row["differenceFrames"] = json!((diff.0 as f64 / frame.0 as f64).round() as i64);
+            }
+            // a recording without a length can't vouch for anything
+            if recorded > Tick::ZERO && diff.0.abs() <= SAME_CUT_SLACK.0 { same.push((diff.0.abs(), row)) } else { other.push((diff.0.abs(), row)) }
+        }
+        same.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1["path"].as_str().cmp(&b.1["path"].as_str())));
+        other.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1["path"].as_str().cmp(&b.1["path"].as_str())));
+        out.push(json!({
+            "item": m.item,
+            "name": m.name,
+            "fileName": m.file_name,
+            "season": season,
+            "episode": episode,
+            "recordedSeconds": recorded.seconds(),
+            "candidates": same.into_iter().map(|c| c.1).collect::<Vec<_>>(),
+            "otherCuts": other.into_iter().map(|c| c.1).collect::<Vec<_>>(),
+        }));
+    }
+    Ok(json!({"suggestions": out, "withoutEpisodeNumber": unnumbered, "linked": 0}))
+}
+
 /// `media.makeOffline {items?, deleteFiles?}`.
 pub fn make_offline(s: &mut Session, p: &Value) -> Result<Value> {
     let items: Vec<ItemId> = match p.get("items").and_then(Value::as_array) {
@@ -718,6 +826,16 @@ pub fn commands() -> Vec<CommandSpec> {
             params: r#"{"folder":str,"item":id?,"exactName":bool=true}"#,
             enabled: always,
             run: |s, p| search(s, p),
+            journal: false,
+        },
+        CommandSpec {
+            id: "media.relinkSuggest",
+            label: "Suggest Renamed Episodes",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"folder":str,"item":id?}  (same show word, season and episode under another name, with lengths; links nothing: confirm each with media.relink + force)"#,
+            enabled: always,
+            run: |s, p| relink_suggest(s, p),
             journal: false,
         },
         CommandSpec {
