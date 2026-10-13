@@ -11,4 +11,5 @@ build = "build.rs"
 workspace = true
 
 [dependencies]
+craft-stage = { path = "../craft-stage" }
 log = { workspace = true }
