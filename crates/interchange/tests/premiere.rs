@@ -367,7 +367,10 @@ fn premiere_sequence_pixel_aspect_is_read() {
 #[test]
 fn premiere_project_keeps_importing_past_an_unreadable_effect_value() {
     // one parameter of one effect holds something that is not a number
-    let xml = project_xml().replace("<ParameterID>6</ParameterID><StartKeyframe>-91445760000000000,0.5:0.5,", "<ParameterID>6</ParameterID><StartKeyframe>-91445760000000000,oops:0.5,");
+    let xml = project_xml().replace(
+        "<ParameterID>6</ParameterID><StartKeyframe>-91445760000000000,0.5:0.5,",
+        "<ParameterID>6</ParameterID><StartKeyframe>-91445760000000000,oops:0.5,",
+    );
     let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
     let text = report.to_string();
     assert!(text.contains("AE.ADBE Motion parameter 6 could not be read"), "{text}");
@@ -389,7 +392,10 @@ fn premiere_gaussian_blur_checkbox_sharing_the_blurriness_id_is_told_apart() {
  <VideoComponentParam ObjectID="82"><ParameterID>2</ParameterID><StartKeyframe>-91445760000000000,0,0,0,0,0,0,0</StartKeyframe></VideoComponentParam>
  <VideoComponentParam ObjectID="83"><ParameterID>1</ParameterID><StartKeyframe>-91445760000000000,true,0,0,0,0,0,0</StartKeyframe></VideoComponentParam>"#;
     let xml = project_xml()
-        .replace("<Component Index=\"0\" ObjectRef=\"64\"/></Components>", "<Component Index=\"0\" ObjectRef=\"64\"/><Component Index=\"1\" ObjectRef=\"80\"/></Components>")
+        .replace(
+            "<Component Index=\"0\" ObjectRef=\"64\"/></Components>",
+            "<Component Index=\"0\" ObjectRef=\"64\"/><Component Index=\"1\" ObjectRef=\"80\"/></Components>",
+        )
         .replace("</PremiereData>", &format!("{blur}</PremiereData>"));
     let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
     assert!(!report.to_string().contains("could not be read"), "{report}");
@@ -438,7 +444,8 @@ fn premiere_clip_that_starts_before_its_media_is_trimmed_not_refused() {
 #[test]
 fn premiere_media_with_a_time_base_for_a_frame_rate_does_not_refuse_the_project() {
     // 2822400 ticks is 1/90000 s: the file's time base, stored where a frame duration belongs
-    let xml = project_xml().replace("<VideoStream ObjectID=\"40\"><FrameRate>10594584000</FrameRate>", "<VideoStream ObjectID=\"40\"><FrameRate>2822400</FrameRate>");
+    let xml =
+        project_xml().replace("<VideoStream ObjectID=\"40\"><FrameRate>10594584000</FrameRate>", "<VideoStream ObjectID=\"40\"><FrameRate>2822400</FrameRate>");
     assert_ne!(xml, project_xml());
     let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
     assert!(report.to_string().contains("frame duration FilmCraft cannot use (2822400 ticks)"), "{report}");
@@ -465,7 +472,8 @@ fn premiere_project_with_an_object_defined_twice_uses_the_first() {
     assert!(matches!(&media.media, filmcraft_project::MediaRef::File { path } if path == "/media/example.mov"));
     // an empty id is no id: still refused, and so is a preset file with a repeated id
     assert!(premiere::import_project(project_xml().replace("ObjectUID=\"movie\"", "ObjectUID=\"\"").as_bytes(), &ImportOptions::default()).is_err());
-    let preset_twice = preset_xml(0).replace("</PremiereData>", "<TreeItem ObjectID=\"1\"><TreeItemBase><Name>Again</Name></TreeItemBase></TreeItem></PremiereData>");
+    let preset_twice =
+        preset_xml(0).replace("</PremiereData>", "<TreeItem ObjectID=\"1\"><TreeItemBase><Name>Again</Name></TreeItemBase></TreeItem></PremiereData>");
     assert!(premiere::import_presets(preset_twice.as_bytes()).is_err());
 }
 
@@ -480,11 +488,23 @@ fn premiere_effects_without_controls_are_carried_over() {
         ("PR.ADBE Black &amp; White", "black_white"),
     ] {
         for bypass in [false, true] {
+            // the older names carry one empty placeholder where a control would be
+            let (params, placeholder) = if match_name.starts_with("PR.") {
+                (
+                    "<Params><Param Index=\"0\" ObjectRef=\"81\"/></Params>",
+                    "<ArbVideoComponentParam ObjectID=\"81\"><IsTimeVarying>false</IsTimeVarying><ParameterControlType>9</ParameterControlType><StartKeyframePosition>-91445760000000000</StartKeyframePosition><ParameterID>-1</ParameterID></ArbVideoComponentParam>",
+                )
+            } else {
+                ("<Params/>", "")
+            };
             let effect = format!(
-                "<VideoFilterComponent ObjectID=\"80\"><MatchName>{match_name}</MatchName><Component><Bypass>{bypass}</Bypass><Params/></Component></VideoFilterComponent>"
+                "<VideoFilterComponent ObjectID=\"80\"><MatchName>{match_name}</MatchName><Component><Bypass>{bypass}</Bypass>{params}</Component></VideoFilterComponent>{placeholder}"
             );
             let xml = project_xml()
-                .replace("<Component Index=\"0\" ObjectRef=\"64\"/></Components>", "<Component Index=\"0\" ObjectRef=\"64\"/><Component Index=\"1\" ObjectRef=\"80\"/></Components>")
+                .replace(
+                    "<Component Index=\"0\" ObjectRef=\"64\"/></Components>",
+                    "<Component Index=\"0\" ObjectRef=\"64\"/><Component Index=\"1\" ObjectRef=\"80\"/></Components>",
+                )
                 .replace("</PremiereData>", &format!("{effect}</PremiereData>"));
             let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
             assert!(!report.has_warnings(), "{match_name}: {report}");
@@ -494,6 +514,141 @@ fn premiere_effects_without_controls_are_carried_over() {
             // Motion is still there, and still after the effect it frames
             assert!(video.effect("motion").is_some());
         }
+    }
+}
+
+/// `project_xml` with one more effect on its video clip: `match_name` and its controls as
+/// (ParameterID, value) pairs.
+fn project_with_effect(match_name: &str, controls: &[(i64, &str)]) -> String {
+    let refs: String = (0..controls.len()).map(|i| format!("<Param Index=\"{i}\" ObjectRef=\"{}\"/>", 81 + i)).collect();
+    let params: String = controls
+        .iter()
+        .enumerate()
+        .map(|(i, (id, value))| {
+            format!(
+                "<VideoComponentParam ObjectID=\"{}\"><ParameterID>{id}</ParameterID><StartKeyframe>-91445760000000000,{value},0,0,0,0,0,0</StartKeyframe></VideoComponentParam>",
+                81 + i
+            )
+        })
+        .collect();
+    let effect = format!(
+        "<VideoFilterComponent ObjectID=\"80\"><MatchName>{match_name}</MatchName><Component><Params>{refs}</Params></Component></VideoFilterComponent>{params}"
+    );
+    let xml = project_xml()
+        .replace(
+            "<Component Index=\"0\" ObjectRef=\"64\"/></Components>",
+            "<Component Index=\"0\" ObjectRef=\"64\"/><Component Index=\"1\" ObjectRef=\"80\"/></Components>",
+        )
+        .replace("</PremiereData>", &format!("{effect}</PremiereData>"));
+    assert_ne!(xml, project_xml());
+    xml
+}
+
+/// Brightness & Contrast, Drop Shadow and Basic 3D have the same controls here: their values
+/// come across, written the way the files write them (`87.`, an opacity out of 255).
+#[test]
+fn premiere_brightness_contrast_drop_shadow_and_basic_3d_keep_their_values() {
+    let import = |xml: String| {
+        let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+        let video = imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0].clone();
+        (video, report)
+    };
+    let (video, report) = import(project_with_effect("AE.ADBE Brightness &amp; Contrast 2", &[(1, "15."), (2, "-74.5")]));
+    assert!(!report.has_warnings(), "{report}");
+    let effect = video.effect("brightness_contrast").expect("Brightness & Contrast was dropped");
+    assert_eq!((effect.f64_at("brightness", Tick::ZERO), effect.f64_at("contrast", Tick::ZERO)), (15.0, -74.5));
+
+    let shadow = [(1, "18374686479671623680"), (2, "127.5"), (3, "140."), (4, "60."), (5, "26."), (6, "true")];
+    let (video, report) = import(project_with_effect("AE.ADBE Drop Shadow", &shadow));
+    assert!(!report.has_warnings(), "{report}");
+    let effect = video.effect("drop_shadow").expect("Drop Shadow was dropped");
+    assert!((effect.f64_at("opacity", Tick::ZERO) - 50.0).abs() < 1e-9, "127.5 of 255 is 50 %");
+    assert_eq!((effect.f64_at("direction", Tick::ZERO), effect.f64_at("distance", Tick::ZERO), effect.f64_at("softness", Tick::ZERO)), (140.0, 60.0, 26.0));
+    assert!(matches!(effect.param("only").unwrap().value, filmcraft_project::ParamValue::Bool(true)));
+    // a shadow colour other than black is not read: the report says so, the rest still comes across
+    let mut tinted = shadow;
+    tinted[0] = (1, "18374967954648334335");
+    let (video, report) = import(project_with_effect("AE.ADBE Drop Shadow", &tinted));
+    assert!(report.to_string().contains("AE.ADBE Drop Shadow parameter 1 is not supported"), "{report}");
+    assert_eq!(video.effect("drop_shadow").unwrap().f64_at("distance", Tick::ZERO), 60.0);
+
+    let (video, report) =
+        import(project_with_effect("AE.ADBE Basic 3D", &[(1, "-38.801406860352"), (2, "-69.659805297852"), (3, "41."), (4, "false"), (5, "false")]));
+    assert!(!report.has_warnings(), "{report}");
+    let effect = video.effect("basic_3d").expect("Basic 3D was dropped");
+    assert_eq!(
+        (effect.f64_at("swivel", Tick::ZERO), effect.f64_at("tilt", Tick::ZERO), effect.f64_at("distance", Tick::ZERO)),
+        (-38.801406860352, -69.659805297852, 41.0)
+    );
+    // Motion is still there beside each of them
+    assert!(video.effect("motion").is_some());
+}
+
+/// `project_xml` with a transition at the end of its video clip (`video`) or its audio clip.
+fn project_with_transition(video: bool, match_name: &str, extra: &str) -> String {
+    let (tag, track) = if video { ("VideoTransitionTrackItem", "VideoClipTrack") } else { ("AudioTransitionTrackItem", "AudioClipTrack") };
+    let transition = format!(
+        "<{tag} ObjectID=\"80\"><TransitionTrackItem><TrackItem><Start>{start}</Start><End>{end}</End></TrackItem><MatchName>{match_name}</MatchName><Alignment>{duration}</Alignment><HasOutgoingClip>true</HasOutgoingClip><HasIncomingClip>false</HasIncomingClip></TransitionTrackItem>{extra}</{tag}>",
+        start = TPS + TPS / 2,
+        end = 2 * TPS,
+        duration = TPS / 2
+    );
+    let xml = project_xml()
+        .replace(
+            &format!("</ClipItems></ClipTrack></{track}>"),
+            &format!("</ClipItems><TransitionItems><TrackItems><TrackItem ObjectRef=\"80\"/></TrackItems></TransitionItems></ClipTrack></{track}>"),
+        )
+        .replace("</PremiereData>", &format!("{transition}</PremiereData>"));
+    assert_ne!(xml, project_xml());
+    xml
+}
+
+#[test]
+fn premiere_dissolves_without_controls_are_timeline_transitions() {
+    for (match_name, id) in [
+        ("AE.ADBE Dip To Black", "dip_to_black"),
+        ("ADBE Dip To Black", "dip_to_black"),
+        ("AE.ADBE Dip To White", "dip_to_white"),
+        ("ADBE Dip To White", "dip_to_white"),
+        ("ADBE Additive Dissolve", "additive_dissolve"),
+        ("ADBE Film Dissolve", "film_dissolve"),
+    ] {
+        let xml = project_with_transition(true, match_name, "");
+        let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+        assert!(!report.has_warnings(), "{match_name}: {report}");
+        let track = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0];
+        assert_eq!(track.transitions.len(), 1, "{match_name} was skipped");
+        let transition = &track.transitions[0];
+        assert_eq!(transition.effect.effect, id, "{match_name}");
+        assert_eq!((transition.start, transition.duration), (Tick(TPS + TPS / 2), Tick(TPS / 2)), "{match_name}");
+        assert_eq!(transition.from, Some(track.items[0].id), "{match_name}");
+    }
+}
+
+/// Newer projects write an audio crossfade with an adjustable curve as "Custom Fade", with a
+/// shape type and value. It becomes the nearest of the three fades FilmCraft has, and the
+/// report says the curve itself was not kept.
+#[test]
+fn premiere_custom_audio_fade_becomes_the_nearest_named_fade() {
+    let shape = |kind: i32, value: i32| {
+        format!("<FadeShapeType>{kind}</FadeShapeType><FadeShapeValue>{value}</FadeShapeValue><CrossfadeSymmetry>0</CrossfadeSymmetry>")
+    };
+    for (extra, id, label) in [
+        (shape(1, 19), "constant_power", "Constant Power"),
+        (shape(1, 16), "constant_power", "Constant Power"),
+        (shape(1, 0), "constant_gain", "Constant Gain"),
+        (shape(0, 0), "constant_gain", "Constant Gain"),
+        (shape(0, -35), "exponential_fade", "Exponential Fade"),
+        (String::new(), "constant_power", "Constant Power"),
+        ("<FadeShapeType>x</FadeShapeType><FadeShapeValue>NaN</FadeShapeValue>".to_string(), "constant_power", "Constant Power"),
+    ] {
+        let xml = project_with_transition(false, "Custom Fade", &extra);
+        let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+        let track = &imported.project.sequence(imported.sequences[0]).unwrap().audio_tracks[0];
+        assert_eq!(track.transitions.len(), 1, "{extra}: skipped");
+        assert_eq!(track.transitions[0].effect.effect, id, "{extra}");
+        let text = report.to_string();
+        assert!(text.contains(&format!("\"Custom Fade\" was imported as {label}")), "{extra}: {text}");
     }
 }
 
