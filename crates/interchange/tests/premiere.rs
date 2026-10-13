@@ -468,3 +468,56 @@ fn premiere_project_with_an_object_defined_twice_uses_the_first() {
     let preset_twice = preset_xml(0).replace("</PremiereData>", "<TreeItem ObjectID=\"1\"><TreeItemBase><Name>Again</Name></TreeItemBase></TreeItem></PremiereData>");
     assert!(premiere::import_presets(preset_twice.as_bytes()).is_err());
 }
+
+#[test]
+fn premiere_effects_without_controls_are_carried_over() {
+    for (match_name, id) in [
+        ("AE.ADBE Horizontal Flip", "horizontal_flip"),
+        ("PR.ADBE Horizontal Flip", "horizontal_flip"),
+        ("AE.ADBE Vertical Flip", "vertical_flip"),
+        ("PR.ADBE Vertical Flip", "vertical_flip"),
+        ("AE.ADBE Black &amp; White", "black_white"),
+        ("PR.ADBE Black &amp; White", "black_white"),
+    ] {
+        for bypass in [false, true] {
+            let effect = format!(
+                "<VideoFilterComponent ObjectID=\"80\"><MatchName>{match_name}</MatchName><Component><Bypass>{bypass}</Bypass><Params/></Component></VideoFilterComponent>"
+            );
+            let xml = project_xml()
+                .replace("<Component Index=\"0\" ObjectRef=\"64\"/></Components>", "<Component Index=\"0\" ObjectRef=\"64\"/><Component Index=\"1\" ObjectRef=\"80\"/></Components>")
+                .replace("</PremiereData>", &format!("{effect}</PremiereData>"));
+            let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+            assert!(!report.has_warnings(), "{match_name}: {report}");
+            let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+            let carried = video.effect(id).unwrap_or_else(|| panic!("{match_name} was dropped"));
+            assert_eq!(carried.enabled, !bypass, "{match_name}");
+            // Motion is still there, and still after the effect it frames
+            assert!(video.effect("motion").is_some());
+        }
+    }
+}
+
+#[test]
+fn premiere_generated_graphics_are_kept_switched_off_and_look_for_no_file() {
+    // a graphic made inside the application: a four-character code as a number where the path belongs
+    let xml = project_xml().replace(
+        "<Media ObjectUID=\"movie\"><FilePath>/media/example.mov</FilePath>",
+        "<Media ObjectUID=\"movie\"><FilePath>1196574294</FilePath><ActualMediaFilePath>1196574294</ActualMediaFilePath><Title>Graphic</Title><Infinite>true</Infinite>",
+    );
+    assert_ne!(xml, project_xml());
+    let opts = ImportOptions { base_dir: Some("/projects".into()), ..Default::default() };
+    let (imported, report) = premiere::import_project(xml.as_bytes(), &opts).unwrap();
+    let text = report.to_string();
+    assert!(text.contains("(Graphic) was preserved as an offline placeholder"), "{text}");
+    assert!(text.contains("kept on the timeline switched off"), "{text}");
+    let sequence = imported.project.sequence(imported.sequences[0]).unwrap();
+    let video = &sequence.video_tracks[0].items[0];
+    assert!(!video.enabled, "a placeholder that covered the picture");
+    assert_eq!((video.start, video.duration), (Tick::ZERO, Tick(2 * TPS)), "the clip keeps its place");
+    let media = imported.project.item(video.item).unwrap().as_media().unwrap();
+    assert!(media.offline);
+    assert!(matches!(&media.media, filmcraft_project::MediaRef::File { path } if path.is_empty()), "no file name made up from the code: {:?}", media.media);
+    // a file-backed clip in the same place stays on
+    let (plain, _) = premiere::import_project(project_xml().as_bytes(), &opts).unwrap();
+    assert!(plain.project.sequence(plain.sequences[0]).unwrap().video_tracks[0].items[0].enabled);
+}

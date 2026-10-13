@@ -45,6 +45,11 @@ pub(super) fn component(
         "AE.ADBE Offset" => "offset",
         "AE.ADBE Motion Blur" => "directional_blur",
         "AE.ADBE Gaussian Blur 2" => "gaussian_blur",
+        // effects without controls: the match name is all there is to carry over (each has an
+        // older "PR." and a newer "AE." name)
+        "AE.ADBE Horizontal Flip" | "PR.ADBE Horizontal Flip" => "horizontal_flip",
+        "AE.ADBE Vertical Flip" | "PR.ADBE Vertical Flip" => "vertical_flip",
+        "AE.ADBE Black & White" | "PR.ADBE Black & White" => "black_white",
         "Internal Volume Mono" | "Internal Volume Stereo" => "volume",
         _ => {
             let name = text_at(node, &["Component", "DisplayName"]).or_else(|| child_text(node, "CustomDisplayName")).unwrap_or(match_name);
