@@ -197,7 +197,9 @@ fn parameter(
     match_name: &str,
     report: &mut Report,
 ) -> Result<Param> {
-    let mut p = Param::new(static_text(node).map(|v| value(v, default, conversion, graph)).transpose()?.unwrap_or_else(|| default.clone()));
+    let is_point = matches!(conversion, Conversion::Point(_));
+    let fixed = if is_point { static_point(node) } else { static_text(node).map(str::to_string) };
+    let mut p = Param::new(fixed.map(|v| value(&v, default, conversion, graph)).transpose()?.unwrap_or_else(|| default.clone()));
     if !graph.boolean(node, &["IsTimeVarying"], false)? {
         return Ok(p);
     }
@@ -219,11 +221,21 @@ fn parameter(
             return Err(error(graph.format, "keyframe time is out of range"));
         }
         let data = fields.get(1).ok_or_else(|| error(graph.format, "keyframe value is missing"))?;
+        // older files write a point as two fields (`time,x,y,…`): everything after it sits one further on
+        let old_point = is_point && !data.contains(':');
+        let joined;
+        let data: &str = if old_point {
+            joined = format!("{data}:{}", fields.get(2).ok_or_else(|| error(graph.format, "point keyframe has no y value"))?);
+            &joined
+        } else {
+            data
+        };
+        let at = |index: usize| fields.get(index + usize::from(old_point));
         let mut key = Keyframe::new(Tick(time), value(data, default, conversion, graph)?);
-        let incoming = fields.get(5).map(|v| finite(v, graph)).transpose()?.unwrap_or(0.0);
-        let outgoing = fields.get(7).map(|v| finite(v, graph)).transpose()?.unwrap_or(0.0);
-        let in_speed = fields.get(4).map(|v| finite(v, graph)).transpose()?.unwrap_or(0.0);
-        let out_speed = fields.get(6).map(|v| finite(v, graph)).transpose()?.unwrap_or(0.0);
+        let incoming = at(5).map(|v| finite(v, graph)).transpose()?.unwrap_or(0.0);
+        let outgoing = at(7).map(|v| finite(v, graph)).transpose()?.unwrap_or(0.0);
+        let in_speed = at(4).map(|v| finite(v, graph)).transpose()?.unwrap_or(0.0);
+        let out_speed = at(6).map(|v| finite(v, graph)).transpose()?.unwrap_or(0.0);
         if !(0.0..=1.0).contains(&incoming) || !(0.0..=1.0).contains(&outgoing) {
             return Err(error(graph.format, "keyframe influence is outside 0..1"));
         }
@@ -236,7 +248,8 @@ fn parameter(
         } else {
             Interpolation::Linear
         };
-        approximated |= in_speed != 0.0 || out_speed != 0.0 || fields.get(10..).is_some_and(|v| v.iter().any(|s| s.parse::<f64>().is_ok_and(|v| v != 0.0)));
+        approximated |=
+            in_speed != 0.0 || out_speed != 0.0 || fields.get(10 + usize::from(old_point)..).is_some_and(|v| v.iter().any(|s| s.parse::<f64>().is_ok_and(|v| v != 0.0)));
         p.keyframes.push(key);
     }
     p.keyframes.sort_by_key(|k| k.time);
@@ -247,6 +260,18 @@ fn parameter(
         report.warn(format!("Premiere effect {match_name} temporal velocities or spatial tangents were approximated by FilmCraft keyframe interpolation"));
     }
     Ok(p)
+}
+
+/// A point parameter's fixed value as `x:y`. Current files write it as one field of the start
+/// keyframe (`time,x:y,…`); project versions up to 36 or so write two (`time,x,y,…`).
+fn static_point(node: Node<'_, '_>) -> Option<String> {
+    let Some(record) = child_text(node, "StartKeyframe") else { return child_text(node, "CurrentValue").map(str::to_string) };
+    let mut fields = record.split(',').skip(1).map(str::trim);
+    let first = fields.next()?;
+    if first.contains(':') {
+        return Some(first.to_string());
+    }
+    Some(format!("{first}:{}", fields.next()?))
 }
 
 pub(super) fn put_effect(effects: &mut Vec<EffectInstance>, effect: EffectInstance) {
