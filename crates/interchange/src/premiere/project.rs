@@ -14,8 +14,11 @@ use crate::{ImportOptions, Imported, Report, Result};
 pub fn import_project(bytes: &[u8], opts: &ImportOptions) -> Result<(Imported, Report)> {
     let text = decode(bytes, PROJECT)?;
     let doc = parse(&text, PROJECT)?;
-    let graph = Graph::new(doc.root_element(), PROJECT)?;
+    let graph = Graph::new(doc.root_element(), PROJECT, super::graph::Duplicates::KeepFirst)?;
     let mut report = Report::default();
+    for name in &graph.duplicates {
+        report.warn(format!("Premiere object {name} is defined twice under one id; the first definition was used"));
+    }
     let mut importer = Importer {
         graph,
         opts,
@@ -168,7 +171,20 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
             let (frame_rate, approximate) = if spec.kind == Some(MediaKind::Still) {
                 (FrameRate::FPS_24, false)
             } else {
-                rate(self.graph.integer(video, &["FrameRate"], TICKS_PER_SECOND / 24)?)?
+                // A file with a 90 kHz time base and no frame rate of its own (a screen recording,
+                // a variable-rate phone clip) is stored with that tick as its "frame": the rate
+                // is read from the file itself when it is linked, so do not refuse the project.
+                let period = self.graph.integer(video, &["FrameRate"], TICKS_PER_SECOND / 24)?;
+                match rate(period) {
+                    Ok(found) => found,
+                    Err(_) => {
+                        self.report.warn(format!(
+                            "Premiere media \"{}\" stores a frame duration FilmCraft cannot use ({period} ticks); 24 fps is assumed until the file is linked",
+                            shortened(name, 120)
+                        ));
+                        (FrameRate::FPS_24, false)
+                    }
+                }
             };
             if approximate {
                 self.report.info("Premiere media frame duration was rounded in the file; the frame rate uses a bounded rational approximation")
@@ -264,6 +280,16 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                         source_in.checked_add(duration).ok_or_else(|| error(PROJECT, "clip source range overflows"))?,
                     )?;
                     let still = self.builder.p.item(source_item).and_then(|i| i.as_media()).is_some_and(|m| m.info.kind == MediaKind::Still);
+                    // A clip may begin before its media does (sound slipped against its picture,
+                    // for one): nothing plays there. Trim that empty head, so the project opens
+                    // and everything after it stays where it was.
+                    let (start, duration, source_in) = match empty_head(duration, source_in, source_out, still) {
+                        Some(head) => {
+                            self.report.warn(format!("Premiere clip \"{}\" starts before its media; its empty head was trimmed", shortened(name, 120)));
+                            (start + head, duration - head, 0)
+                        }
+                        None => (start, duration, source_in),
+                    };
                     if !(0..=super::MAX_TIME_TICKS).contains(&source_in) || source_out < source_in || (!still && source_out > super::MAX_TIME_TICKS) {
                         return Err(error(PROJECT, "invalid clip source range"));
                     }
@@ -410,6 +436,22 @@ fn rate(period: i64) -> Result<(FrameRate, bool)> {
 fn pixel_aspect(text: &str) -> Option<(u32, u32)> {
     let (num, den) = text.trim().split_once(',')?;
     filmcraft_project::checked_par((num.trim().parse().ok()?, den.trim().parse().ok()?))
+}
+
+/// Timeline ticks a clip spends before its media starts: `Some` when the source range begins
+/// below zero and reaches into the media, so that trimming them leaves a clip that plays from the
+/// media's first frame. `duration` is the clip's length on the timeline (positive).
+fn empty_head(duration: i64, source_in: i64, source_out: i64, still: bool) -> Option<i64> {
+    if source_in >= 0 || source_in < -super::MAX_TIME_TICKS || source_out <= 0 {
+        return None;
+    }
+    // the clip's speed is its source span over its timeline length; a still has none
+    let span = if still { i128::from(duration) } else { i128::from(source_out) - i128::from(source_in) };
+    if span <= 0 {
+        return None;
+    }
+    let head = (i128::from(duration) * i128::from(-source_in)).div_euclid(span);
+    i64::try_from(head).ok().filter(|head| (1..duration).contains(head))
 }
 
 /// At most `max` characters of `text`, for a report line.

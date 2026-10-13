@@ -13,7 +13,7 @@ use crate::{Report, Result};
 pub fn import_presets(bytes: &[u8]) -> Result<(Vec<ImportedPreset>, Report)> {
     let text = decode(bytes, PRESETS)?;
     let doc = parse(&text, PRESETS)?;
-    let graph = Graph::new(doc.root_element(), PRESETS)?;
+    let graph = Graph::new(doc.root_element(), PRESETS, super::graph::Duplicates::Reject)?;
     let mut report = Report::default();
     let mut presets = Vec::new();
     for (item, name) in preset_entries(&graph)? {
