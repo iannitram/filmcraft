@@ -315,10 +315,21 @@ pub fn newest_file(dir: &Path, wanted: &dyn Fn(&str) -> bool) -> Option<PathBuf>
 }
 
 /// The last line of the file at `path` that contains `needle`, looking at its last `max_bytes`.
+/// Only a regular file is read: opening a FIFO waits for a writer (see [`crate::cli::open_append`]).
 pub fn last_line_with(path: &Path, needle: &str, max_bytes: u64) -> Option<String> {
     use std::io::{Read as _, Seek as _, SeekFrom};
-    let mut f = std::fs::File::open(path).ok()?;
-    let len = f.metadata().ok()?.len();
+    if !std::fs::metadata(path).ok()?.is_file() {
+        return None;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    crate::cli::nonblocking(&mut options);
+    let mut f = options.open(path).ok()?;
+    let meta = f.metadata().ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    let len = meta.len();
     f.seek(SeekFrom::Start(len.saturating_sub(max_bytes))).ok()?;
     let mut bytes = Vec::new();
     f.take(max_bytes).read_to_end(&mut bytes).ok()?;
@@ -440,6 +451,22 @@ mod tests {
         assert!(got.is_err_and(|e| e.contains("no answer")));
         assert!(t0.elapsed() < Duration::from_secs(3));
         assert_eq!(first_line_of(Path::new("/bin/echo"), &["hello"], FFMPEG_TIMEOUT).as_deref(), Ok("hello"));
+    }
+
+    #[test]
+    fn a_fifo_in_place_of_a_log_is_not_waited_for() {
+        let dir = std::env::temp_dir().join(format!("craft-log-report-fifo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("app.log");
+        if !Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success()) {
+            return; // no mkfifo (Windows): nothing to check
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || tx.send(last_line_with(&fifo, "x", 10)));
+        let got = rx.recv_timeout(Duration::from_secs(5));
+        assert_eq!(got, Ok(None), "reading the previous run's end waited on a FIFO");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
