@@ -97,6 +97,7 @@ SUBCOMMANDS
                                 --image-sequence <media> is the first numbered still of a sequence
   bench-decode <media> [--frames N]
   mcp                           MCP server on stdio (headless, or --bridge to the live app)
+  diagnostics [--json]          this system, build, graphics, video, folders and where the logs are
   help                          this text
   --version                     print the version
 
@@ -310,6 +311,7 @@ async fn cli() {
     match cmd {
         "help" | "-h" => out!("{HELP}"),
         "version" => outln!("filmcraft-cli {}", env!("CARGO_PKG_VERSION")),
+        "diagnostics" => out!("{}", self_logging::diagnostics(a.opt("--data-dir"), a.flag("--json"))), // ours
         "probe" => {
             let path = a.pos(1).unwrap_or_else(|| usage("probe <media> [--image-sequence]"));
             match probe::probe(path, a.flag("--image-sequence")) {
