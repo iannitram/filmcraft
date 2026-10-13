@@ -343,6 +343,10 @@ mod binary {
         for run in t.list(text, 0)?.filter_map(|at| t.target(at)) {
             let first = words.chars().count();
             words.push_str(t.field(run, 0).and_then(|at| t.string(at)).unwrap_or(""));
+            // many runs may name the same long string: the text as a whole is capped too
+            if words.len() > MAX_STRING {
+                return None;
+            }
             let Some(style) = t.table(run, 1) else { continue };
             let font = t.field(style, 0).and_then(|at| t.u32(at)).unwrap_or(0);
             let values = [
