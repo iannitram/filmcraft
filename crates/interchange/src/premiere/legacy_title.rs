@@ -20,10 +20,13 @@
 //!   stretch of characters a style and a text description (each line counts one more character
 //!   than it has: its end).
 //!
-//! Each text chain becomes one FilmCraft text layer: point text with its lines as they were
-//! broken, placed by its alignment point on the first baseline. Which field is which was worked
-//! out from the values in a few hundred titles. Not read: shapes and pictures, gradients (the
-//! first colour is used), the stroke kinds other than an edge, tracking and leading.
+//! Each line of a text chain becomes one FilmCraft text layer: point text placed by the line's
+//! alignment point in the chain's box, on the line's own baseline. A line advances by the font
+//! size in a title and by the font's own line height in a text layer here, so one layer for a
+//! whole block would put its lines somewhere else; a layer for each line puts every line where
+//! it was. Which field is which was worked out from the values in a few hundred titles. Not
+//! read: shapes and pictures, gradients (the first colour is used), the stroke kinds other than
+//! an edge, and tracking.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -46,7 +49,6 @@ const MAX_PREFS_BASE64: usize = 8 << 20;
 const MAX_TITLE_BYTES: usize = 16 << 20;
 const MAX_TITLE_NODES: u32 = 1_000_000;
 const MAX_LAYERS: usize = 256;
-const MAX_LINES: usize = 1024;
 const MAX_CHARACTERS: usize = 100_000;
 const MAX_FRAME: f64 = 100_000.0;
 
@@ -58,7 +60,7 @@ const EDGE: &str = "2";
 /// The colour option of a shader that is one solid colour.
 const SOLID: &str = "4";
 
-/// The text layers of one title, placed in the frame the title was laid out in.
+/// The text layers of one title, one for each line, placed in the frame the title was laid out in.
 pub(super) struct Title {
     frame: (f64, f64),
     layers: Vec<EffectInstance>,
@@ -134,9 +136,14 @@ pub(super) fn read(prefs_base64: &str, report: &mut Report) -> Option<Title> {
     }
     let mut notes = Notes::default();
     let mut layers = Vec::new();
-    for chain in root.descendants().filter(|n| n.has_tag_name("TextChain")).take(MAX_LAYERS) {
-        if let Some(layer) = chain_layer(chain, &tables, &mut notes) {
-            layers.push(layer);
+    'chains: for chain in root.descendants().filter(|n| n.has_tag_name("TextChain")) {
+        for line in chain.children().filter(|n| n.has_tag_name("TextLine")) {
+            if layers.len() >= MAX_LAYERS {
+                break 'chains;
+            }
+            if let Some(layer) = line_layer(chain, line, &tables, &mut notes) {
+                layers.push(layer);
+            }
         }
     }
     if root.descendants().any(|n| n.has_tag_name("DrawObject")) {
@@ -149,7 +156,7 @@ pub(super) fn read(prefs_base64: &str, report: &mut Report) -> Option<Title> {
         report.warn("Premiere legacy title strokes other than the first two edges (depth, drop face, inner) are not imported");
     }
     if notes.spacing {
-        report.info("Premiere legacy title tracking and leading are not imported; the font's own spacing is used");
+        report.info("Premiere legacy title tracking is not imported; the font's own spacing is used");
     }
     Some(Title { frame, layers })
 }
@@ -179,7 +186,7 @@ struct Type {
     underline: bool,
 }
 
-/// One stretch of characters of a chain and what it is drawn with.
+/// One stretch of characters of a line and what it is drawn with.
 struct Span<'a> {
     start: usize,
     end: usize,
@@ -187,40 +194,25 @@ struct Span<'a> {
     style_id: &'a str,
 }
 
-fn chain_layer<'a, 'i>(chain: Node<'a, 'i>, tables: &Tables<'a, 'i>, notes: &mut Notes) -> Option<EffectInstance> {
-    let lines: Vec<Node<'a, 'i>> = chain.children().filter(|n| n.has_tag_name("TextLine")).take(MAX_LINES).collect();
-    let first = *lines.first()?;
-    let mut text = String::new();
-    let mut count = 0usize;
-    let mut spans: Vec<Span<'a>> = Vec::new();
-    for (index, line) in lines.iter().enumerate() {
-        if index > 0 {
-            text.push('\n');
-            count = count.checked_add(1)?;
-        }
-        let line_start = count;
-        let said = at(*line, &["TRString"]).and_then(|n| n.text()).unwrap_or("");
-        text.push_str(said);
-        count = count.checked_add(said.chars().count())?;
-        if count > MAX_CHARACTERS {
-            return None;
-        }
-        // the runs of a line count its characters and one more, its end: the line break here
-        let mut from = line_start;
-        for run in at(*line, &["RunLengthEncodedCharacterAttributes"]).into_iter().flat_map(|n| n.children()).filter(|n| n.has_tag_name("CharacterAttributes"))
-        {
-            let length = run.attribute("RunCount").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(0).min(MAX_CHARACTERS);
-            let to = from.checked_add(length)?.min(count.checked_add(1)?);
-            if let (Some(type_id), Some(style_id)) = (run.attribute("TextRef"), run.attribute("StyleRef"))
-                && to > from
-            {
-                spans.push(Span { start: from, end: to, type_id, style_id });
-            }
-            from = to;
-        }
-    }
-    if text.trim().is_empty() {
+/// The text layer for one line of a chain, or `None` for a line without words.
+fn line_layer<'a, 'i>(chain: Node<'a, 'i>, line: Node<'a, 'i>, tables: &Tables<'a, 'i>, notes: &mut Notes) -> Option<EffectInstance> {
+    let text = at(line, &["TRString"]).and_then(|n| n.text()).unwrap_or("");
+    let count = text.chars().count();
+    if text.trim().is_empty() || count > MAX_CHARACTERS {
         return None;
+    }
+    // the runs of a line count its characters and one more, its end
+    let mut spans: Vec<Span<'a>> = Vec::new();
+    let mut from = 0usize;
+    for run in at(line, &["RunLengthEncodedCharacterAttributes"]).into_iter().flat_map(|n| n.children()).filter(|n| n.has_tag_name("CharacterAttributes")) {
+        let length = run.attribute("RunCount").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(0).min(MAX_CHARACTERS);
+        let to = from.checked_add(length)?.min(count);
+        if let (Some(type_id), Some(style_id)) = (run.attribute("TextRef"), run.attribute("StyleRef"))
+            && to > from
+        {
+            spans.push(Span { start: from, end: to, type_id, style_id });
+        }
+        from = to;
     }
 
     let mut layer = find_effect(TEXT_LAYER)?.instance();
@@ -229,19 +221,19 @@ fn chain_layer<'a, 'i>(chain: Node<'a, 'i>, tables: &Tables<'a, 'i>, notes: &mut
             *p = Param::new(value);
         }
     };
-    set("text", ParamValue::Text(text));
+    set("text", ParamValue::Text(text.to_string()));
 
-    // where the chain's box is, and the alignment point on its first baseline
+    // the line's alignment point in the chain's box, on the line's own baseline
     let property = at(chain, &["ChainProperty"]);
     let of = |path: &[&str]| property.and_then(|p| number(p, path));
-    let align = match words(first, &["Alignment"]) {
+    let align = match words(line, &["Alignment"]) {
         Some("center") => 1u32,
         Some("right") => 2,
         _ => 0,
     };
-    let left = of(&["Position", "x"]).or_else(|| number(first, &["BaseProperties", "XPos"]));
+    let left = of(&["Position", "x"]).or_else(|| number(line, &["BaseProperties", "XPos"]));
     let width = of(&["Size", "x"]).unwrap_or(0.0).max(0.0);
-    let baseline = number(first, &["BaseProperties", "txBase"]);
+    let baseline = number(line, &["BaseProperties", "txBase"]);
     if let (Some(left), Some(baseline)) = (left, baseline) {
         let x = match align {
             1 => left + width / 2.0,
@@ -253,9 +245,6 @@ fn chain_layer<'a, 'i>(chain: Node<'a, 'i>, tables: &Tables<'a, 'i>, notes: &mut
         }
     }
     set("align", ParamValue::Choice(align));
-    if of(&["leading"]).is_some_and(|v| v != 0.0) {
-        notes.spacing = true;
-    }
 
     // the look of the first stretch is the layer's own; the stretches that differ are style runs
     let base_type = spans.first().map(|s| type_of(tables, s.type_id, notes)).unwrap_or_default();
@@ -344,7 +333,7 @@ fn chain_layer<'a, 'i>(chain: Node<'a, 'i>, tables: &Tables<'a, 'i>, notes: &mut
 
 fn type_of(tables: &Tables<'_, '_>, id: &str, notes: &mut Notes) -> Type {
     let Some(spec) = tables.types.get(id).and_then(|node| at(*node, &["TypeSpec"])) else { return Type::default() };
-    if number(spec, &["txKern"]).is_some_and(|v| v != 0.0) || number(spec, &["leading"]).is_some_and(|v| v != 0.0) {
+    if number(spec, &["txKern"]).is_some_and(|v| v != 0.0) {
         notes.spacing = true;
     }
     let name = |tag: &str| words(spec, &[tag]).filter(|v| !v.is_empty() && v.len() <= 200).map(str::to_string);
