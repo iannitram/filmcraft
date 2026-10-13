@@ -8,7 +8,7 @@ use crate::xml::child_text;
 use crate::{Report, Result};
 
 #[derive(Clone, Copy)]
-enum Conversion {
+pub(super) enum Conversion {
     Native,
     Point((u32, u32)),
     Gain,
@@ -19,6 +19,8 @@ enum Conversion {
 /// Opaque black as a native colour value: the default of every colour control seen so far. How
 /// the other colours are packed into that number is not known, so they are not read.
 const OPAQUE_BLACK: &str = "18374686479671623680";
+
+const VECTOR_MOTION: &str = "AE.ADBE Graphic Group";
 
 /// What to do with a parameter whose value cannot be read.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -46,6 +48,9 @@ pub(super) fn component(
     let id = match match_name {
         "AE.ADBE Motion" => "motion",
         "AE.ADBE Geometry2" => "transform",
+        // Vector Motion moves a whole graphic before the clip's own Motion does, which is what
+        // the Transform effect does here. It has Motion's controls in Motion's order.
+        VECTOR_MOTION => "transform",
         "AE.ADBE Opacity" => "opacity",
         "AE.ADBE AECrop" => "crop",
         "AE.ADBE Offset" => "offset",
@@ -79,6 +84,21 @@ pub(super) fn component(
         // Observed project files give Gaussian Blur's Repeat Edge Pixels checkbox the same
         // ParameterID as Blurriness (1, 2, 1): tell the two apart by what they hold.
         let number = if id == "gaussian_blur" && number == 1 && matches!(static_text(native), Some("true" | "false")) { 3 } else { number };
+        // Vector Motion's controls, renumbered to Transform's: position, scale, scale width,
+        // uniform scale, rotation, anchor point
+        let number = if match_name == VECTOR_MOTION {
+            match number {
+                1 => 2,
+                2 => 3,
+                3 => 4,
+                4 => 11,
+                5 => 7,
+                6 => 1,
+                _ => 0,
+            }
+        } else {
+            number
+        };
         let mapped = match (id, number) {
             ("motion", 1) => Some(("position", Conversion::Point(sequence_size))),
             ("motion", 2) => Some(("scale", Conversion::Native)),
@@ -218,7 +238,7 @@ fn value(text: &str, default: &ParamValue, conversion: Conversion, graph: &Graph
     }
 }
 
-fn parameter(
+pub(super) fn parameter(
     graph: &Graph<'_, '_>,
     node: Node<'_, '_>,
     origin: Tick,
