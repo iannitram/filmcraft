@@ -35,6 +35,7 @@ mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod self_logging; // ours
 mod window_raise;
 
 use args::{Cli, Launch};
@@ -78,7 +79,7 @@ fn tell(text: &str, error: bool) {
 
 fn main() -> eframe::Result {
     // First, so the panic hook and every start-up record are logged (`logging`).
-    let logger = logging::install();
+    let logger = self_logging::install(); // ours: upstream's logging::install, wrapped
     // lossy, so a value that is not Unicode is reported like any other bad port instead of ignored
     let env_port = std::env::var_os("FILMCRAFT_CONTROL_PORT").map(|p| p.to_string_lossy().into_owned());
     let launch = match args::parse(env_port, std::env::args_os().skip(1)) {
@@ -110,6 +111,9 @@ fn main() -> eframe::Result {
                 log::warn!("no log file: no data directory (set FILMCRAFT_DATA_DIR or --data-dir)");
             }
         }
+    }
+    if let Some(d) = &log_dir {
+        self_logging::log_dir(d); // ours
     }
     app_nap::disable();
     #[cfg(target_os = "linux")]
