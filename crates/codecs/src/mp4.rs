@@ -106,6 +106,38 @@ fn hdr_metadata(md: Option<&filmcraft_isobmff::MasteringDisplay>, cll: Option<(u
     })
 }
 
+/// The frame rate a track's sample durations (in `timescale` units a second) stand for.
+///
+/// When every frame lasts the same, that duration says it. When the time stamps were rounded to
+/// a coarser unit than the frames need (whole milliseconds, a 90 kHz clock stepped in
+/// milliseconds, 600 units a second for 29.97 fps), the durations alternate between the two
+/// neighbours of the real one, and the median is one of them: 23.976 fps reads as 23.81, 29.97
+/// as 30. Then the mean over the track, which the rounding cannot move by more than one unit in
+/// all, names the rate: the standard rate nearest to it, if one lies within that uncertainty.
+/// A track whose mean is near no standard rate (a recording at a variable rate) keeps its median.
+fn nominal_rate(durations: impl Iterator<Item = u32> + Clone, timescale: u32) -> FrameRate {
+    let mut first: Vec<u32> = durations.clone().take(240).collect();
+    first.sort_unstable();
+    let d = first.get(first.len() / 2).copied().unwrap_or(1).max(1);
+    let median = FrameRate::from_f64(timescale as f64 / d as f64);
+    // A rate that rounds to zero (one sample per huge duration) can't be divided by.
+    let median = if median.num > 0 && median.den > 0 { median } else { FrameRate::default() };
+    if first.first() == first.last() {
+        return median;
+    }
+    let (count, total) = durations.take(1_000_000).fold((0u64, 0u64), |(n, sum), d| (n + 1, sum.saturating_add(u64::from(d))));
+    if count < 2 || total == 0 || timescale == 0 {
+        return median;
+    }
+    let mean = f64::from(timescale) * count as f64 / total as f64;
+    let slack = (0.005 + mean / total as f64).min(0.25);
+    let nearest = FrameRate::COMMON.into_iter().min_by(|a, b| (a.as_f64() - mean).abs().total_cmp(&(b.as_f64() - mean).abs()));
+    match nearest {
+        Some(rate) if (rate.as_f64() - mean).abs() <= slack => rate,
+        _ => median,
+    }
+}
+
 /// The clean aperture (`clap`, ISO/IEC 14496-12 / QuickTime) of a `w`×`h` decoded picture as a
 /// pixel rectangle: its size, centred on the picture and moved by its offsets, rounded to whole
 /// samples. `None` (the whole picture is shown) when it is the whole picture or makes no sense: a
@@ -244,13 +276,7 @@ impl Mp4Source {
             };
             aperture = vp.clean_aperture.and_then(|c| clean_aperture(c, (w, h)));
             let (w, h) = aperture.map_or((w, h), |r| (r.w as u32, r.h as u32));
-            // frame rate from the median sample duration
-            let mut durs: Vec<u32> = t.samples.iter().take(240).map(|s| s.duration).collect();
-            durs.sort_unstable();
-            let d = durs.get(durs.len() / 2).copied().unwrap_or(1).max(1);
-            let rate = FrameRate::from_f64(t.timescale as f64 / d as f64);
-            // A rate that rounds to zero (one sample per huge duration) can't be divided by.
-            let rate = if rate.num > 0 && rate.den > 0 { rate } else { FrameRate::default() };
+            let rate = nominal_rate(t.samples.iter().map(|s| s.duration), t.timescale);
             color = color_from(entry, w, h);
             if entry
                 .video
