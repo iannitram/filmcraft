@@ -1042,7 +1042,7 @@ fn premiere_text_in_the_binary_form_becomes_a_text_layer() {
     let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
     let said = report.to_string();
     assert!(!said.contains("AE.ADBE Text"), "read, not skipped: {said}");
-    assert!(said.contains("more than one style"), "the second run is smaller: {said}");
+    assert!(!said.contains("more than one"), "the smaller second run is a style run, not a loss: {said}");
     let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
     assert!(video.enabled);
     let layers: Vec<_> = video.graphic_layers().collect();
@@ -1071,6 +1071,10 @@ fn premiere_text_in_the_binary_form_becomes_a_text_layer() {
         (50.0, 10.0, 30.0)
     );
     assert_eq!(layer.vec2_at("position", Tick::ZERO), Vec2::new(480.0, 540.0));
+    // "fonts", the second run, is smaller: a style run over its five characters
+    let runs = &layer.layer.as_ref().expect("a style run").runs;
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!((runs[0].start, runs[0].end, runs[0].style.size), (4, 9, Some(40.0)));
 }
 
 /// Every number in the binary form comes from the file: cut short anywhere, or with any byte
@@ -1098,4 +1102,236 @@ fn premiere_text_in_a_damaged_binary_form_never_panics() {
         let result = std::panic::catch_unwind(|| premiere::import_project(xml.as_bytes(), &ImportOptions::default()).map(|_| ()));
         assert!(matches!(result, Ok(Ok(()))), "{case:?}");
     }
+}
+
+/// A text whose later characters have another size and colour keeps them as style runs: each
+/// value runs from its first character to the next value's, and a value equal to the first
+/// character's is the layer's own.
+#[test]
+fn premiere_text_with_several_styles_keeps_them_as_style_runs() {
+    use filmcraft_project::{CharStyle, StyleRun};
+    let json = TITLE_JSON
+        .replace(r#""mFontSize":{"mParamValues":[[0,77.5]]}"#, r#""mFontSize":{"mParamValues":[[0,77.5],[2,30]]}"#)
+        .replace(r#""mFillColor":{"mParamValues":[[0,16711680]]}"#, r#""mFillColor":{"mParamValues":[[0,16711680],[2,255],[11,16711680]]}"#);
+    assert_ne!(json, TITLE_JSON);
+    let xml = project_with_text_layer(&source_text_json(&json));
+    let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+    let said = report.to_string();
+    assert!(!said.contains("more than one"), "nothing was dropped: {said}");
+    let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+    let layer = video.graphic_layers().next().unwrap();
+    assert_eq!(layer.f64_at("size", Tick::ZERO), 77.5, "the layer has the first character's size");
+    let runs = &layer.layer.as_ref().expect("style runs").runs;
+    assert_eq!(
+        runs,
+        &[
+            StyleRun { start: 2, end: 17, style: CharStyle { size: Some(30.0), ..Default::default() } },
+            StyleRun { start: 2, end: 11, style: CharStyle { fill: Some([0.0, 0.0, 1.0, 1.0]), ..Default::default() } },
+        ]
+    );
+    // a single style leaves the layer without runs
+    let plain = project_with_text_layer(&source_text_json(TITLE_JSON));
+    let (imported, _) = premiere::import_project(plain.as_bytes(), &ImportOptions::default()).unwrap();
+    let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+    assert!(video.graphic_layers().next().unwrap().layer.as_ref().is_none_or(|extra| extra.runs.is_empty()));
+}
+
+/// A title document as the Title Designer of the older project versions stores it, authored for
+/// this test: a 1280x720 layout with one centred block of two lines. The first four characters
+/// are in the first text description and style, the rest of the first line in the second.
+const LEGACY_TITLE: &str = concat!(
+    "<?xml version=\"1.0\" encoding=\"UTF-16\" ?><Adobe_Root><InscriberLayouts Version=\"1.0\"><Layout>",
+    "<LayoutDimension Version=\"2\"><pXPIXELS>1280</pXPIXELS><pYLINES>720</pYLINES></LayoutDimension>",
+    "<TextDescriptions Version=\"4\">",
+    "<TextDescription Reference=\"4096\"><TypeSpec><txHeight>80</txHeight><txKern>0</txKern><leading>0</leading><txSCapsOn>true</txSCapsOn>",
+    "<txUnderline>false</txUnderline><fifontFamilyName>Example Sans</fifontFamilyName><fifontStyle>Bold</fifontStyle></TypeSpec></TextDescription>",
+    "<TextDescription Reference=\"4097\"><TypeSpec><txHeight>40</txHeight><txKern>0</txKern><leading>0</leading><txSCapsOn>false</txSCapsOn>",
+    "<txUnderline>false</txUnderline><fifontFamilyName>Example Serif</fifontFamilyName><fifontStyle>Regular</fifontStyle></TypeSpec></TextDescription>",
+    "</TextDescriptions><Styles>",
+    "<Style ID=\"4096\"><StyleBase Version=\"4\"><shadow_softness>30</shadow_softness></StyleBase><FragmentList Version=\"5\">",
+    "<Fragment><size>0</size><offset>0</offset><angle>0</angle><eFragmentType>0</eFragmentType><fragmentOff>false</fragmentOff>",
+    "<annotation>65538</annotation><painterMix>15 15 </painterMix></Fragment>",
+    "<Fragment><size>6</size><offset>0</offset><angle>0</angle><eFragmentType>2</eFragmentType><fragmentOff>false</fragmentOff>",
+    "<annotation>1</annotation><painterMix>13 13 </painterMix></Fragment>",
+    "<Fragment><size>3</size><offset>12</offset><angle>-45</angle><eFragmentType>0</eFragmentType><fragmentOff>false</fragmentOff>",
+    "<annotation>65537</annotation><painterMix>0 0 </painterMix></Fragment></FragmentList>",
+    "<ShaderList Version=\"1\"><ShaderRef PainterNumber=\"13\"><shaderRef>4098</shaderRef></ShaderRef>",
+    "<ShaderRef PainterNumber=\"15\"><shaderRef>4096</shaderRef></ShaderRef><ShaderRef PainterNumber=\"-1\"><shaderRef>4097</shaderRef></ShaderRef></ShaderList></Style>",
+    "<Style ID=\"4097\"><StyleBase Version=\"4\"><shadow_softness>30</shadow_softness></StyleBase><FragmentList Version=\"5\">",
+    "<Fragment><size>0</size><offset>0</offset><angle>0</angle><eFragmentType>0</eFragmentType><fragmentOff>false</fragmentOff>",
+    "<annotation>65538</annotation><painterMix>15 15 </painterMix></Fragment></FragmentList>",
+    "<ShaderList Version=\"1\"><ShaderRef PainterNumber=\"15\"><shaderRef>4099</shaderRef></ShaderRef></ShaderList></Style>",
+    "</Styles><Shaders>",
+    "<Shader Version=\"4\"><cReference>4096</cReference><colorOption>4</colorOption>",
+    "<ColorSpec index=\"0\"><red>255</red><green>255</green><blue>0</blue><xpar>0</xpar></ColorSpec>",
+    "<ColorSpec index=\"4\"><red>250</red><green>250</green><blue>250</blue><xpar>0</xpar></ColorSpec></Shader>",
+    "<Shader Version=\"4\"><cReference>4097</cReference><colorOption>0</colorOption>",
+    "<ColorSpec index=\"0\"><red>0</red><green>0</green><blue>0</blue><xpar>51</xpar></ColorSpec></Shader>",
+    "<Shader Version=\"4\"><cReference>4098</cReference><colorOption>4</colorOption>",
+    "<ColorSpec index=\"0\"><red>0</red><green>0</green><blue>255</blue><xpar>0</xpar></ColorSpec></Shader>",
+    "<Shader Version=\"4\"><cReference>4099</cReference><colorOption>4</colorOption>",
+    "<ColorSpec index=\"0\"><red>255</red><green>0</green><blue>0</blue><xpar>0</xpar></ColorSpec></Shader>",
+    "</Shaders><Layers><Layer><TextPage><TextChain>",
+    "<ChainProperty Version=\"9\"><wordWrap>false</wordWrap><Position><x>200</x><y>300</y></Position><Size><x>400</x><y>160</y></Size><leading>0</leading></ChainProperty>",
+    "<TextLine Version=\"2\" objectID=\"2\"><BaseProperties Version=\"5\"><txBase>360</txBase><XPos>250</XPos><angle>0</angle></BaseProperties>",
+    "<Alignment>center</Alignment><TRString>Big small</TRString><RunLengthEncodedCharacterAttributes>",
+    "<CharacterAttributes RunCount=\"4\" StyleRef=\"4096\" TextRef=\"4096\"/><CharacterAttributes RunCount=\"6\" StyleRef=\"4097\" TextRef=\"4097\"/>",
+    "</RunLengthEncodedCharacterAttributes></TextLine>",
+    "<TextLine Version=\"2\" objectID=\"3\"><BaseProperties Version=\"5\"><txBase>440</txBase><XPos>300</XPos><angle>0</angle></BaseProperties>",
+    "<Alignment>center</Alignment><TRString>below</TRString><RunLengthEncodedCharacterAttributes>",
+    "<CharacterAttributes RunCount=\"6\" StyleRef=\"4096\" TextRef=\"4096\"/></RunLengthEncodedCharacterAttributes></TextLine>",
+    "</TextChain></TextPage></Layer></Layers></Layout></InscriberLayouts></Adobe_Root>"
+);
+
+/// The value a title is stored in: 16 bytes of header, a tag, then the document as a zlib stream
+/// of UTF-16LE with a byte-order mark.
+fn legacy_title_prefs(document: &str) -> Vec<u8> {
+    let text: Vec<u8> = std::iter::once(0xfeffu16).chain(document.encode_utf16()).flat_map(u16::to_le_bytes).collect();
+    let mut bytes = 1u64.to_le_bytes().to_vec();
+    bytes.extend((text.len() as u64).to_le_bytes());
+    bytes.extend(b"CompressedTitle\0");
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(&text).unwrap();
+    bytes.extend(encoder.finish().unwrap());
+    bytes
+}
+
+/// `project_xml` with its media made a title of the Title Designer: a number where the path
+/// belongs and the title's document in `ImporterPrefs` (`prefs` is that element, whole).
+fn project_with_legacy_title(prefs: &str) -> String {
+    let xml = project_xml().replace(
+        "<Media ObjectUID=\"movie\"><FilePath>/media/example.mov</FilePath>",
+        &format!("<Media ObjectUID=\"movie\"><FilePath>1414091852</FilePath><Title>Synthetic title</Title><Infinite>true</Infinite>{prefs}"),
+    );
+    assert!(xml.contains("1414091852"));
+    xml
+}
+
+/// A title made in the Title Designer becomes a graphic clip with one text layer for its block
+/// of text: the words with their line break, the font, size, fill, edge and shadow of its first
+/// characters, its alignment point on the first baseline (moved to where a 1280x720 title sits
+/// in a 1920x1080 frame), and a style run for the characters that look different.
+#[test]
+fn premiere_legacy_title_becomes_a_text_layer() {
+    use filmcraft_project::{CharStyle, ParamValue, StyleRun};
+    let value = base64(&legacy_title_prefs(LEGACY_TITLE));
+    let whole = project_with_legacy_title(&format!("<ImporterPrefs Encoding=\"base64\" BinaryHash=\"h1\">{value}</ImporterPrefs>"));
+    // written once elsewhere in the file and named by its hash here
+    let by_hash = project_with_legacy_title("<ImporterPrefs Encoding=\"base64\" BinaryHash=\"h1\"/>").replace(
+        "</PremiereData>",
+        &format!("<Media ObjectUID=\"spare\"><FilePath>1414091852</FilePath><ImporterPrefs Encoding=\"base64\" BinaryHash=\"h1\">{value}</ImporterPrefs></Media></PremiereData>"),
+    );
+    for xml in [whole, by_hash] {
+        let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+        let said = report.to_string();
+        assert!(said.contains("imported as FilmCraft text layers"), "{said}");
+        let sequence = imported.project.sequence(imported.sequences[0]).unwrap();
+        let video = &sequence.video_tracks[0].items[0];
+        assert!(video.enabled, "a title whose text was read is shown");
+        assert!(matches!(imported.project.item(video.item).unwrap().kind, ItemKind::Graphic { width: 1920, height: 1080, .. }));
+        assert_eq!((video.start, video.duration, video.source_in), (Tick::ZERO, Tick(2 * TPS), Tick::ZERO));
+        let layers: Vec<_> = video.graphic_layers().collect();
+        assert_eq!(layers.len(), 1);
+        let layer = layers[0];
+        let text = |id: &str| match &layer.param(id).unwrap().value {
+            ParamValue::Text(s) => s.clone(),
+            other => panic!("{id}: {other:?}"),
+        };
+        assert_eq!((text("text").as_str(), text("font").as_str(), text("font_style").as_str()), ("Big small\nbelow", "Example Sans", "Bold"));
+        assert_eq!(layer.f64_at("size", Tick::ZERO), 80.0);
+        assert!(matches!(layer.param("align").unwrap().value, ParamValue::Choice(1)), "centred");
+        assert!(matches!(layer.param("caps").unwrap().value, ParamValue::Choice(2)), "small capitals");
+        // the middle of the block (200 + 400 / 2) on the first baseline, in a frame 640x360 larger
+        assert_eq!(layer.vec2_at("position", Tick::ZERO), Vec2::new(400.0 + 320.0, 360.0 + 180.0));
+        assert!(matches!(layer.param("fill").unwrap().value, ParamValue::Bool(true)));
+        assert!(matches!(layer.param("fill_color").unwrap().value, ParamValue::Color(c) if c == [1.0, 1.0, 0.0, 1.0]), "{:?}", layer.param("fill_color"));
+        assert!(matches!(layer.param("stroke").unwrap().value, ParamValue::Bool(true)));
+        assert!(matches!(layer.param("stroke_color").unwrap().value, ParamValue::Color(c) if c == [0.0, 0.0, 1.0, 1.0]));
+        assert_eq!(layer.f64_at("stroke_width", Tick::ZERO), 6.0);
+        assert!(matches!(layer.param("stroke2").unwrap().value, ParamValue::Bool(false)));
+        assert!(matches!(layer.param("shadow").unwrap().value, ParamValue::Bool(true)));
+        assert!(matches!(layer.param("shadow_color").unwrap().value, ParamValue::Color(c) if c == [0.0, 0.0, 0.0, 1.0]));
+        assert!((layer.f64_at("shadow_opacity", Tick::ZERO) - 80.0).abs() < 0.001, "a fifth clear: {}", layer.f64_at("shadow_opacity", Tick::ZERO));
+        assert_eq!(
+            (
+                layer.f64_at("shadow_distance", Tick::ZERO),
+                layer.f64_at("shadow_angle", Tick::ZERO),
+                layer.f64_at("shadow_size", Tick::ZERO),
+                layer.f64_at("shadow_blur", Tick::ZERO)
+            ),
+            (12.0, 135.0, 3.0, 30.0)
+        );
+        // "small" and the end of its line: the other font, half the size, red, no small capitals
+        let runs = &layer.layer.as_ref().expect("a style run").runs;
+        let other = CharStyle {
+            font: Some("Example Serif".into()),
+            font_style: Some("Regular".into()),
+            size: Some(40.0),
+            fill: Some([1.0, 0.0, 0.0, 1.0]),
+            caps: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(runs, &[StyleRun { start: 4, end: 10, style: other }]);
+        let spec = filmcraft_project::graphic::eval_layer(layer, Tick::ZERO, (1920, 1080)).expect("a text layer");
+        assert!(matches!(&spec.content, filmcraft_project::graphic::LayerContent::Text(t) if t.text == "Big small\nbelow" && t.size == 80.0));
+        // the sound of the same source has nothing to play: it stays as it was, switched off
+        assert!(!sequence.audio_tracks[0].items[0].enabled);
+    }
+}
+
+/// A title that cannot be read, or has no text, leaves its clip as it was before titles were
+/// read (switched off), and nothing in a damaged one is a panic or a failed import.
+#[test]
+fn premiere_legacy_title_that_is_damaged_never_panics_and_stays_a_placeholder() {
+    let good = legacy_title_prefs(LEGACY_TITLE);
+    let element = |bytes: &[u8]| format!("<ImporterPrefs Encoding=\"base64\">{}</ImporterPrefs>", base64(bytes));
+    let import = |prefs: &str| {
+        let xml = project_with_legacy_title(prefs);
+        let result = std::panic::catch_unwind(|| premiere::import_project(xml.as_bytes(), &ImportOptions::default()));
+        let Ok(Ok((imported, _))) = result else { panic!("not imported: {prefs}") };
+        let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+        (video.enabled, video.graphic_layers().count())
+    };
+    // nothing where the title belongs, not base64, no tag, a stream cut short
+    for prefs in ["<ImporterPrefs Encoding=\"base64\"/>", "<ImporterPrefs Encoding=\"base64\">***</ImporterPrefs>"] {
+        assert_eq!(import(prefs), (false, 0), "{prefs}");
+    }
+    assert_eq!(import(&element(&good[..16])), (false, 0));
+    assert_eq!(import(&element(b"0123456789abcdefNotATitleAtAll\0rest")), (false, 0));
+    for cut in (0..good.len()).step_by(7) {
+        assert_eq!(import(&element(&good[..cut])), (false, 0), "cut at {cut}");
+    }
+    for at in (32..good.len()).step_by(5) {
+        let mut changed = good.clone();
+        changed[at] ^= 0x55;
+        import(&element(&changed));
+    }
+    // numbers that are not numbers, counts past the end, missing parts: read or left out
+    let hostile = [
+        ("RunCount=\"4\"", "RunCount=\"18446744073709551615\""),
+        ("RunCount=\"6\"", "RunCount=\"-3\""),
+        ("<pXPIXELS>1280</pXPIXELS>", "<pXPIXELS>NaN</pXPIXELS>"),
+        ("<pYLINES>720</pYLINES>", "<pYLINES>1e999</pYLINES>"),
+        ("<x>200</x>", "<x>1e999</x>"),
+        ("<txBase>360</txBase>", "<txBase>inf</txBase>"),
+        ("<txHeight>80</txHeight>", "<txHeight>-5</txHeight>"),
+        ("<painterMix>15 15 </painterMix>", "<painterMix></painterMix>"),
+        ("<size>6</size>", "<size>1e308</size>"),
+        ("<angle>-45</angle>", "<angle>1e308</angle>"),
+        ("<red>255</red>", "<red>-1e308</red>"),
+        ("<xpar>51</xpar>", "<xpar>NaN</xpar>"),
+        ("<TRString>Big small</TRString>", "<TRString/>"),
+        ("<Shaders>", "<Shaders><Shader/>"),
+        ("TextRef=\"4097\"", "TextRef=\"none\""),
+        ("<Adobe_Root>", "<Adobe_Root><!DOCTYPE x [<!ENTITY a \"aaaa\">]>"),
+        ("</Adobe_Root>", ""),
+    ];
+    for (from, to) in hostile {
+        let document = LEGACY_TITLE.replace(from, to);
+        assert_ne!(document, LEGACY_TITLE, "{from}");
+        import(&element(&legacy_title_prefs(&document)));
+    }
+    // a title without words has no layer: the clip stays switched off
+    let empty = LEGACY_TITLE.replace("<TRString>Big small</TRString>", "<TRString> </TRString>").replace("<TRString>below</TRString>", "<TRString></TRString>");
+    assert_eq!(import(&element(&legacy_title_prefs(&empty))), (false, 0));
 }

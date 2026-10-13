@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 
 use filmcraft_project::graphic::{ALIGN_OPTS, CAPS_OPTS, TEXT_LAYER};
-use filmcraft_project::{EffectInstance, Param, ParamValue, find_effect};
+use filmcraft_project::{CharStyle, EffectInstance, LayerExtra, Param, ParamValue, StyleRun, find_effect};
 use filmcraft_time::Tick;
 use roxmltree::Node;
 use serde_json::Value;
@@ -40,6 +40,9 @@ pub(super) const MATCH_NAME: &str = "AE.ADBE Text";
 
 /// Source Text larger than this (as base64 text) is not a title: it is not decoded.
 const MAX_SOURCE_TEXT_BASE64: usize = 4 << 20;
+
+/// The values of one style that are turned into style runs: a title has a handful.
+const MAX_STYLE_RUNS: usize = 4096;
 
 /// The FilmCraft text layer for one `AE.ADBE Text` component, or `None` when its text cannot be
 /// read (the caller reports it). Keyframe times are taken relative to `origin`; `shared` is the
@@ -77,38 +80,42 @@ pub(super) fn layer(
         }
     };
     set("text", ParamValue::Text(text.to_string()));
+    // The layer takes the style of its first character. A later stretch that differs in what a
+    // style run holds becomes one (`carried`); a difference a run cannot hold is reported (`mixed`).
+    let mut carried = false;
     let mut mixed = false;
+    let mut run = |key: &str| first_run(sheet, key, &mut carried);
     let mut style = |key: &str| first_run(sheet, key, &mut mixed);
-    if let Some(name) = style("mFontName").and_then(Value::as_str) {
+    if let Some(name) = run("mFontName").and_then(Value::as_str) {
         let (family, face) = font(name);
         set("font", ParamValue::Text(family));
         set("font_style", ParamValue::Text(face));
     }
-    if let Some(size) = style("mFontSize").and_then(number) {
+    if let Some(size) = run("mFontSize").and_then(number) {
         set("size", ParamValue::Float(size.clamp(1.0, 2000.0)));
     }
-    if let Some(v) = style("mTracking").and_then(number) {
+    if let Some(v) = run("mTracking").and_then(number) {
         set("tracking", ParamValue::Float(v.clamp(-1000.0, 10_000.0)));
     }
-    if let Some(v) = style("mBaselineShift").and_then(number) {
+    if let Some(v) = run("mBaselineShift").and_then(number) {
         set("baseline_shift", ParamValue::Float(v.clamp(-5000.0, 5000.0)));
     }
-    if let Some(v) = style("mFauxBold").and_then(Value::as_bool) {
+    if let Some(v) = run("mFauxBold").and_then(Value::as_bool) {
         set("faux_bold", ParamValue::Bool(v));
     }
-    if let Some(v) = style("mFauxItalic").and_then(Value::as_bool) {
+    if let Some(v) = run("mFauxItalic").and_then(Value::as_bool) {
         set("faux_italic", ParamValue::Bool(v));
     }
-    if let Some(v) = style("mUnderline").and_then(Value::as_bool) {
+    if let Some(v) = run("mUnderline").and_then(Value::as_bool) {
         set("underline", ParamValue::Bool(v));
     }
-    if let Some(v) = style("mCapsOption").and_then(choice(CAPS_OPTS.len())) {
+    if let Some(v) = run("mCapsOption").and_then(choice(CAPS_OPTS.len())) {
         set("caps", ParamValue::Choice(v));
     }
     if let Some(v) = style("mFillVisible").and_then(Value::as_bool) {
         set("fill", ParamValue::Bool(v));
     }
-    if let Some(c) = style("mFillColor").and_then(colour) {
+    if let Some(c) = run("mFillColor").and_then(colour) {
         set("fill_color", ParamValue::Color(c));
     }
     let stroke_width = style("mStrokeWidth").and_then(number);
@@ -171,8 +178,14 @@ pub(super) fn layer(
             set("background_size", ParamValue::Float(v.clamp(0.0, 1000.0)));
         }
     }
+    if carried {
+        let runs = style_runs(sheet, text.chars().count());
+        if !runs.is_empty() {
+            layer.layer = Some(Box::new(LayerExtra { runs, ..Default::default() }));
+        }
+    }
     if mixed {
-        report.warn("Premiere text with more than one style in it was imported with the style of its first character");
+        report.warn("Premiere text with more than one stroke in it was imported with the stroke of its first character");
     }
     if graph.boolean(source, &["IsTimeVarying"], false)? {
         report.warn("Premiere animated Source Text is not supported; its first text was used");
@@ -205,12 +218,13 @@ pub(super) fn layer(
     Ok(Some(layer))
 }
 
-/// The binary parameter values of a document by their `BinaryHash`: the file writes a value in
-/// full the first time and leaves the element empty, with the same hash, every time after.
-pub(super) fn shared_values<'a>(root: Node<'a, '_>) -> HashMap<&'a str, &'a str> {
+/// The binary values in the `tag` elements of a document by their `BinaryHash`: the file writes
+/// a value in full the first time and leaves the element empty, with the same hash, every time
+/// after.
+pub(super) fn shared_values<'a>(root: Node<'a, '_>, tag: &str) -> HashMap<&'a str, &'a str> {
     let mut values = HashMap::new();
     for node in root.descendants() {
-        if node.has_tag_name("StartKeyframeValue")
+        if node.has_tag_name(tag)
             && let Some(hash) = node.attribute("BinaryHash")
             && let Some(text) = node.text().filter(|text| !text.trim().is_empty())
         {
@@ -227,6 +241,43 @@ fn first_run<'a>(sheet: &'a Value, key: &str, mixed: &mut bool) -> Option<&'a Va
     let first = runs.first()?.get(1)?;
     *mixed |= runs.iter().skip(1).any(|run| run.get(1) != Some(first));
     Some(first)
+}
+
+/// The stretches of a text of `characters` characters that differ from its first character in
+/// what a style run holds: font, size, fill colour, tracking, baseline shift, faux bold and
+/// italic, underline and capitals. A value runs from its first character to the next value's.
+fn style_runs(sheet: &Value, characters: usize) -> Vec<StyleRun> {
+    let mut runs = Vec::new();
+    let mut each = |key: &str, style: &dyn Fn(&Value) -> Option<CharStyle>| {
+        let Some(values) = sheet.get(key).and_then(|v| v.get("mParamValues")).and_then(Value::as_array) else { return };
+        let Some(first) = values.first().and_then(|value| value.get(1)) else { return };
+        let starts_at = |value: &Value| value.get(0).and_then(Value::as_u64).and_then(|v| usize::try_from(v).ok());
+        for (index, value) in values.iter().enumerate().skip(1).take(MAX_STYLE_RUNS) {
+            let (Some(start), Some(held)) = (starts_at(value), value.get(1)) else { continue };
+            let end = index.checked_add(1).and_then(|next| values.get(next)).and_then(starts_at).unwrap_or(characters).min(characters);
+            if held == first || start >= end {
+                continue;
+            }
+            if let Some(style) = style(held) {
+                runs.push(StyleRun { start, end, style });
+            }
+        }
+    };
+    each("mFontName", &|v| {
+        v.as_str().map(|name| {
+            let (family, face) = font(name);
+            CharStyle { font: Some(family), font_style: Some(face), ..Default::default() }
+        })
+    });
+    each("mFontSize", &|v| number(v).map(|size| CharStyle { size: Some(size.clamp(1.0, 2000.0) as f32), ..Default::default() }));
+    each("mFillColor", &|v| colour(v).map(|c| CharStyle { fill: Some(c), ..Default::default() }));
+    each("mTracking", &|v| number(v).map(|t| CharStyle { tracking: Some(t.clamp(-1000.0, 10_000.0) as f32), ..Default::default() }));
+    each("mBaselineShift", &|v| number(v).map(|s| CharStyle { baseline_shift: Some(s.clamp(-5000.0, 5000.0) as f32), ..Default::default() }));
+    each("mFauxBold", &|v| v.as_bool().map(|on| CharStyle { faux_bold: Some(on), ..Default::default() }));
+    each("mFauxItalic", &|v| v.as_bool().map(|on| CharStyle { faux_italic: Some(on), ..Default::default() }));
+    each("mUnderline", &|v| v.as_bool().map(|on| CharStyle { underline: Some(on), ..Default::default() }));
+    each("mCapsOption", &|v| choice(CAPS_OPTS.len())(v).map(|caps| CharStyle { caps: Some(caps), ..Default::default() }));
+    runs
 }
 
 /// The text document inside a Source Text value, in the shape of the JSON form, or `None` for
@@ -388,7 +439,7 @@ mod binary {
 }
 
 /// Standard base64 with `=` padding; white space between characters is skipped.
-fn decode_base64(text: &str) -> Option<Vec<u8>> {
+pub(super) fn decode_base64(text: &str) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(text.len() / 4 * 3);
     let (mut bits, mut count) = (0u32, 0u32);
     for byte in text.bytes() {
