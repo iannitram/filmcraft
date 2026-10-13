@@ -7,22 +7,10 @@ use filmcraft_apv::{
     ChromaFormat, ContentLightLevel, DecodeOptions, Encoder, EncoderConfig, Frame, MasteringDisplay, Profile, decode_frame, decode_frame_with, probe,
 };
 
-/// ffmpeg with the APV demuxer and decoder (added in FFmpeg 8.0), or `None` after reporting a skip.
 fn ffmpeg() -> Option<PathBuf> {
-    let ff = filmcraft_testkit::ffmpeg_or_skip("apv oracle")?;
-    if !(ffmpeg_lists(&ff, "-demuxers", "apv") && ffmpeg_lists(&ff, "-decoders", "apv")) {
-        let version = Command::new(&ff).arg("-version").output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
-        let version = version.split_whitespace().nth(2).unwrap_or("(unknown version)").to_owned();
-        filmcraft_testkit::skip("apv oracle", &format!("ffmpeg {version} cannot read APV (needs 8.0+)"));
-        return None;
-    }
-    Some(ff)
-}
-
-/// Whether `ffmpeg -hide_banner <list>` has an entry named exactly `name` (the second column).
-fn ffmpeg_lists(ff: &Path, list: &str, name: &str) -> bool {
-    let out = Command::new(ff).args(["-hide_banner", list]).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
-    out.lines().any(|line| line.split_whitespace().nth(1).is_some_and(|n| n.split(',').any(|n| n == name)))
+    // The APV demuxer is new in ffmpeg 8.0; older toolchains are found but
+    // cannot read the fixtures, so they skip like a missing tool (#1249).
+    filmcraft_testkit::ffmpeg_with_format_or_skip("apv oracle", "apv", "8.0")
 }
 
 fn fixture_dir() -> PathBuf {

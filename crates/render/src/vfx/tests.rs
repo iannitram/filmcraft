@@ -13,11 +13,11 @@ fn cx() -> FxCtx<'static> {
         t: Tick::ZERO,
         px_scale: 1.0,
         seconds: 0.0,
-        frame_rate: 24.0,
         timecode: "01:00:00:00",
         clip_name: "clip",
         project: None,
         env: None,
+        frame_rate: 24.0,
         working: filmcraft_color::WorkingSpace::Rec709,
     }
 }
@@ -1204,11 +1204,10 @@ mod pipeline {
     }
 }
 
-/// Upstream issue 1088: the Transform shutter blurred the frames just before a move starts and just
-/// after it ends, while the layer itself was still at rest there (a ghost of the move to come).
-/// The frames either side of the keyframed move must match the unblurred picture.
 #[test]
-fn transform_shutter_blur_stays_inside_the_keyframed_move() {
+fn transform_shutter_uses_the_sequence_frame_rate_without_env() {
+    // An adjustment layer has no env: the shutter must still span one 60 fps frame at 360°, so
+    // the frames just before the motion starts and just after it ends stay sharp (#1088).
     let mut e = inst("transform");
     set(&mut e, "shutter_override", ParamValue::Bool(true));
     setf(&mut e, "shutter_angle", 360.0);
@@ -1217,13 +1216,18 @@ fn transform_shutter_blur_stays_inside_the_keyframed_move() {
     let mut b = Keyframe::new(Tick::from_seconds_f64(2.0), ParamValue::Vec2(filmcraft_geom::Vec2::new(40.0, 16.0)));
     b.interp = Interpolation::Linear;
     e.params.insert("position".into(), Param { value: ParamValue::Vec2(filmcraft_geom::Vec2::new(8.0, 16.0)), keyframes: vec![a, b] });
+    let img = picture(32, 32);
     let mut off = e.clone();
     set(&mut off, "shutter_override", ParamValue::Bool(false));
-    let img = picture(32, 32);
-    for frame in [22, 23, 49, 50] {
-        let t = Tick::from_rational(frame, 1, 24);
-        let cx = FxCtx { t, seconds: t.seconds(), ..cx() };
-        let delta = max_diff(&run("transform", &off, &img, &cx), &run("transform", &e, &img, &cx));
-        assert!(delta < 1e-4, "frame {frame} at rest is blurred ({delta})");
+    let delta = |frame: i32| {
+        let s = f64::from(frame) / 60.0;
+        let cx = FxCtx { t: Tick::from_seconds_f64(s), seconds: s, frame_rate: 60.0, ..cx() };
+        max_diff(&run("transform", &off, &img, &cx), &run("transform", &e, &img, &cx))
+    };
+    for frame in [59, 121] {
+        assert!(delta(frame) < 1e-4, "frame {frame} is blurred outside the motion ({})", delta(frame));
+    }
+    for frame in [60, 90, 120] {
+        assert!(delta(frame) > 1e-3, "frame {frame} moves but is sharp");
     }
 }
