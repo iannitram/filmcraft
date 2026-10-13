@@ -8,7 +8,9 @@
 //!
 //! What the document holds, as far as it is read here:
 //!
-//! - `LayoutDimension`: the frame the title was laid out in (`pXPIXELS`, `pYLINES`).
+//! - `LayoutDimension`: the frame the title was laid out in (`pXPIXELS`, `pYLINES`) and how wide
+//!   the letters are drawn in that frame's pixels (`pSCREENAR`: 1 for square pixels, 0.825 for
+//!   the widescreen pixels of a 720x480 frame, which are 1.2121 wide).
 //! - `TextDescription` (by `Reference`): a font (family and style names) and its size.
 //! - `Style` (by `ID`): a list of `Fragment`s, each one thing that is painted (the face of the
 //!   letters, a stroke, the shadow), and a list that gives each painter number a shader.
@@ -63,6 +65,8 @@ const SOLID: &str = "4";
 /// The text layers of one title, one for each line, placed in the frame the title was laid out in.
 pub(super) struct Title {
     frame: (f64, f64),
+    /// How wide a letter is drawn in the title's own pixels: one over their pixel aspect.
+    screen: f64,
     layers: Vec<EffectInstance>,
 }
 
@@ -71,17 +75,30 @@ impl Title {
         self.layers.is_empty()
     }
 
-    /// The layers placed in a sequence frame of `size`: a title of another size sits in the
-    /// middle of the frame, as a clip does.
-    pub(super) fn layers_in(&self, size: (u32, u32)) -> Vec<EffectInstance> {
-        let shift = Vec2::new((f64::from(size.0) - self.frame.0) / 2.0, (f64::from(size.1) - self.frame.1) / 2.0);
+    /// The layers placed in a sequence frame of `size` whose pixels have the aspect `par`: a
+    /// title of another size sits in the middle of the frame, as a clip does. In pixels that
+    /// are not square the letters are drawn narrower or wider by that much, so they have their
+    /// shape when the frame is shown; a title made for other pixels than the sequence's is as
+    /// much wider or narrower about the middle as its clip was.
+    pub(super) fn layers_in(&self, size: (u32, u32), par: (u32, u32)) -> Vec<EffectInstance> {
+        let pixel = if par.0 > 0 && par.1 > 0 { f64::from(par.0) / f64::from(par.1) } else { 1.0 };
+        let stretch = 1.0 / (self.screen * pixel);
+        let letters = 100.0 / pixel;
         let mut layers = self.layers.clone();
         for layer in &mut layers {
             if let Some(param) = layer.params.get_mut("position")
                 && let ParamValue::Vec2(place) = &param.value
             {
-                let moved = Vec2::new(place.x + shift.x, place.y + shift.y);
-                *param = Param::new(ParamValue::Vec2(moved));
+                let x = f64::from(size.0) / 2.0 + (place.x - self.frame.0 / 2.0) * stretch;
+                let y = place.y + (f64::from(size.1) - self.frame.1) / 2.0;
+                *param = Param::new(ParamValue::Vec2(Vec2::new(x, y)));
+            }
+            if (letters - 100.0).abs() > 0.05 {
+                for (id, value) in [("uniform_scale", ParamValue::Bool(false)), ("scale_width", ParamValue::Float(letters))] {
+                    if let Some(param) = layer.params.get_mut(id) {
+                        *param = Param::new(value);
+                    }
+                }
             }
         }
         layers
@@ -113,6 +130,7 @@ pub(super) fn read(prefs_base64: &str, report: &mut Report) -> Option<Title> {
     let layout = root.descendants().find(|n| n.has_tag_name("LayoutDimension"))?;
     let side = |name: &str| number(layout, &[name]).filter(|v| (1.0..=MAX_FRAME).contains(v));
     let frame = (side("pXPIXELS")?, side("pYLINES")?);
+    let screen = number(layout, &["pSCREENAR"]).filter(|v| (0.1..=10.0).contains(v)).unwrap_or(1.0);
     let mut tables = Tables::default();
     for node in root.descendants() {
         match node.tag_name().name() {
@@ -158,7 +176,7 @@ pub(super) fn read(prefs_base64: &str, report: &mut Report) -> Option<Title> {
     if notes.spacing {
         report.info("Premiere legacy title tracking is not imported; the font's own spacing is used");
     }
-    Some(Title { frame, layers })
+    Some(Title { frame, screen, layers })
 }
 
 #[derive(Default)]
