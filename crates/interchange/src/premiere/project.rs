@@ -1,12 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
 use filmcraft_media::MediaKind;
-use filmcraft_project::{BinId, ItemId, SequenceSettings, TrackKind, Transition, TransitionAlign, TransitionId, find_effect};
+use filmcraft_project::{BinId, ItemId, ItemKind, Label, SequenceSettings, TrackKind, Transition, TransitionAlign, TransitionId, find_effect};
 use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick};
 use roxmltree::Node;
 
 use super::effects;
 use super::graph::{Graph, PROJECT, at, decode, error, key, parse, text_at};
+use super::text;
 use crate::common::{Builder, MediaSpec, empty_sequence, kind_from_ext, rate_from_f64, resolve_path, settings_for};
 use crate::xml::{child_text, elements};
 use crate::{ImportOptions, Imported, Report, Result};
@@ -27,6 +28,7 @@ pub fn import_project(bytes: &[u8], opts: &ImportOptions) -> Result<(Imported, R
         leaves: Vec::new(),
         nesting: HashMap::new(),
         generated: HashSet::new(),
+        canvases: Vec::new(),
         report: &mut report,
     };
     let project = elements(importer.graph.root)
@@ -80,6 +82,8 @@ struct Importer<'a, 'i, 'o, 'r> {
     nesting: HashMap<ItemId, Vec<ItemId>>,
     /// Sources made inside the application (graphics, titles, mattes): there is no file behind them.
     generated: HashSet<ItemId>,
+    /// The sources of imported graphic clips, one per sequence frame size and rate.
+    canvases: Vec<((u32, u32, FrameRate), ItemId)>,
     report: &'r mut Report,
 }
 
@@ -329,9 +333,19 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                         .map(|v| (v.width, v.height))
                         .or_else(|| self.builder.p.sequence(source_item).map(|s| (s.settings.width, s.settings.height)))
                         .unwrap_or(sequence_size);
+                    let generated = self.generated.contains(&source_item);
+                    let mut layers = Vec::new();
                     if let Some(reference) = at(item, &["ClipTrackItem", "ComponentOwner", "Components"]) {
                         let chain = self.graph.resolve(reference)?;
                         for component in self.graph.references(chain, &["ComponentChain", "Components"])? {
+                            // a text layer of a graphic made inside the application
+                            if generated
+                                && child_text(component, "MatchName") == Some(text::MATCH_NAME)
+                                && let Some(layer) = text::layer(&self.graph, component, Tick::ZERO, sequence_size, self.report)?
+                            {
+                                layers.push(layer);
+                                continue;
+                            }
                             if let Some(effect) = effects::component(
                                 &self.graph,
                                 component,
@@ -347,9 +361,24 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                     }
                     // An offline placeholder on an upper track would cover the picture under it
                     // for as long as the title lasted: keep the clip where it is, switched off.
-                    if self.generated.contains(&source_item) {
+                    if generated && layers.is_empty() {
                         imported.enabled = false;
                         self.report.warn("Premiere clips of graphics, titles or mattes made inside Premiere are kept on the timeline switched off; their content is not imported");
+                    } else if generated {
+                        // Its text could be read: a graphic clip. The source is a transparent
+                        // canvas the size of the sequence frame, the text layers are effects on
+                        // the clip, and the clip starts at the canvas's own start (the file has
+                        // it an hour into a source without end), so every keyframe moves with it.
+                        let moved = imported.source_in;
+                        imported.item = self.graphic_canvas(sequence_size, sequence.settings.frame_rate);
+                        imported.source_in = Tick::ZERO;
+                        imported.speed = 1.0;
+                        imported.effects.extend(layers);
+                        for effect in &mut imported.effects {
+                            text::shift_keyframes(effect, moved);
+                        }
+                        self.report
+                            .info("Premiere text layers were imported as FilmCraft text layers; a font that is not installed here is replaced by a stand-in");
                     }
                     clip_ids.insert(key(item), imported.id);
                     imported_track.items.push(imported);
@@ -391,6 +420,18 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
         }
         self.builder.put_sequence(id, sequence);
         Ok(())
+    }
+
+    /// The source item of the graphic clips in a sequence of this frame size and rate: a
+    /// transparent canvas, shared by those clips.
+    fn graphic_canvas(&mut self, size: (u32, u32), rate: FrameRate) -> ItemId {
+        let key = (size.0, size.1, rate);
+        if let Some((_, id)) = self.canvases.iter().find(|(known, _)| *known == key) {
+            return *id;
+        }
+        let id = self.builder.p.add_item("Graphic", Label::Rose, ItemKind::Graphic { width: size.0, height: size.1, rate }, None);
+        self.canvases.push((key, id));
+        id
     }
 
     fn transition(
