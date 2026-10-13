@@ -135,6 +135,28 @@ fn mp4_with_a_1ms_timescale_shows_every_frame_once() {
     check("mov", mp4_1ms);
 }
 
+/// Millisecond stamps on a fine clock: the track runs at 90 kHz and every stamp is a whole
+/// millisecond (a remux from Matroska, or an encoder that keeps time in milliseconds, writes
+/// 23.976 fps as frames of 42 and 41 ms). Rounding the requested time to the track's own unit
+/// does not help there: the stamps were rounded on a coarser one.
+fn mp4_ms_stamps_at_90khz(rate: FrameRate, stamp: Stamp) -> Arc<[u8]> {
+    let mut w = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mov)).unwrap();
+    let t = w.add_track(TrackConfig::new(SampleEntry::jpeg((BITS * BLOCK) as u16, BLOCK as u16), 90_000)).unwrap();
+    for k in 0..frame_count(rate) {
+        let duration = (stamp_ms(rate, k + 1, stamp) - stamp_ms(rate, k, stamp)) as u32 * 90;
+        w.write_sample(t, WriteSample { data: &picture(k), duration, composition_offset: 0, is_sync: true }).unwrap();
+    }
+    w.finish().unwrap().into_inner().into()
+}
+
+/// Measured on an SD episode file (90 kHz, frames of 3780 and 3690 units, 23.976 fps on average):
+/// asked for at its start, every picture whose stamp had been rounded up was missed and the one
+/// before it shown again, so about half the frames of the file showed the wrong picture.
+#[test]
+fn mp4_with_millisecond_stamps_on_a_90khz_clock_shows_every_frame_once() {
+    check("mov", mp4_ms_stamps_at_90khz);
+}
+
 /// A file whose time stamps were rounded says its real frame rate, not the rate of one of the two
 /// durations the rounding left behind (23.976 fps read as 23.81, 29.97 as 30.3).
 #[test]
