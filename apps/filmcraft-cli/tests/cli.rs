@@ -14,6 +14,19 @@ fn json_out(o: &Output) -> Value {
     serde_json::from_slice(&o.stdout).expect("JSON on stdout")
 }
 
+/// `--no-hardware` is the headless engine's Hardware decoding switch (it reads no preferences
+/// file): decoding is software only and no OS decoder or encoder is registered.
+#[test]
+fn no_hardware_switches_hardware_decoding_off() {
+    let v = json_out(&cli(&["--no-hardware", "exec", "perf.stats"]));
+    assert_eq!(v["decode"]["hardware"]["enabled"], false, "{v}");
+    assert!(v["decode"]["hardware"]["backend"].is_null(), "no OS decoder is registered: {v}");
+    // the option may come after the subcommand, like every other one
+    let v = json_out(&cli(&["exec", "perf.stats", "--no-hardware"]));
+    assert_eq!(v["decode"]["hardware"]["enabled"], false, "{v}");
+    assert!(String::from_utf8_lossy(&cli(&["help"]).stdout).contains("--no-hardware"));
+}
+
 #[test]
 fn help_and_usage_errors() {
     let h = cli(&["help"]);
