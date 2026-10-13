@@ -21,8 +21,6 @@ pub struct FxCtx<'a> {
     pub px_scale: f32,
     /// Seconds since the clip start (for animated generators such as Noise/Strobe).
     pub seconds: f64,
-    /// The sequence's frame rate (frames per second): the frame time a shutter angle spans.
-    pub frame_rate: f64,
     /// Formatted sequence timecode (for the Timecode effect).
     pub timecode: &'a str,
     pub clip_name: &'a str,
@@ -31,6 +29,8 @@ pub struct FxCtx<'a> {
     /// The clip's surroundings (other frames, other tracks, sequence geometry) for temporal,
     /// track-reading and reframing effects; `None` in isolated tests and adjustment layers.
     pub env: Option<&'a dyn crate::vfx::FxEnv>,
+    /// Sequence frame rate (shutter-angle motion blur); also known where `env` is `None`.
+    pub frame_rate: f64,
     /// The sequence's working colour space: Lumetri grades HDR (PQ / HLG) working spaces in their
     /// own signal, normalised to HDR White ([`filmcraft_color::GradeSpace`]).
     pub working: filmcraft_color::WorkingSpace,
@@ -932,11 +932,11 @@ mod tests {
             t: Tick::ZERO,
             px_scale: 1.0,
             seconds: 0.0,
-            frame_rate: 24.0,
             timecode: "00:00:01:00",
             clip_name: "x",
             project: None,
             env: None,
+            frame_rate: 24.0,
             working: filmcraft_color::WorkingSpace::Rec709,
         }
     }
@@ -1528,11 +1528,11 @@ mod lumetri_cpu_parity_tests {
             t: Tick::ZERO,
             px_scale: 1.0,
             seconds: 0.0,
-            frame_rate: 24.0,
             timecode: "",
             clip_name: "",
             project: None,
             env: None,
+            frame_rate: 24.0,
             working: filmcraft_color::WorkingSpace::Rec709,
         };
 
@@ -1568,11 +1568,11 @@ mod lumetri_cpu_parity_tests {
             t: Tick::ZERO,
             px_scale: 1.0,
             seconds: 0.0,
-            frame_rate: 24.0,
             timecode: "",
             clip_name: "",
             project: None,
             env: None,
+            frame_rate: 24.0,
             working: filmcraft_color::WorkingSpace::Rec709,
         };
         let render = |roundness: f64| {
