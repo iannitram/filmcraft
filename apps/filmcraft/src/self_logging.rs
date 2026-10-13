@@ -46,7 +46,8 @@ pub fn log_dir(dir: &Path) {
 }
 
 /// Start-up: write the diagnostic report into the log (after the log file, the crash hook, the
-/// hardware decoders and the graphics mode are settled, before the window opens).
+/// hardware decoders and the graphics mode are settled, before the window opens). Waits for
+/// nothing: the helpers (`ffmpeg -version`) are probed on a background thread, whose line follows.
 pub fn start_report(data: Option<&Path>, graphics: &GraphicsStart) {
     let mut r = Report::new(&APP);
     let mode = graphics.mode().label();
@@ -57,11 +58,13 @@ pub fn start_report(data: Option<&Path>, graphics: &GraphicsStart) {
     r.add("screens", "screens and window", "known when the window opens: the \"screen\" and \"window:\" lines after this report");
     report::folders(&mut r, data);
     r.add_switches(report::SWITCH_PREFIXES, report::SECRET_SWITCHES);
-    r.add_helpers();
+    // the window must not wait for `ffmpeg -version`: its line follows the report when it comes
+    r.add_helpers_later();
     let previous = data.map(|d| d.join(report::LOG_DIR).join(report::PREVIOUS_LOG_FILE));
     report::previous_run(&mut r, data, previous.as_deref());
     report::logs(&mut r, data);
     r.log(module_path!());
+    let _ = craft_log::report::log_helpers_in_background(module_path!());
 }
 
 /// The window exists (in eframe's app creator, after the GPU compositor was or was not started):
