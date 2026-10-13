@@ -108,13 +108,13 @@ fn hdr_metadata(md: Option<&filmcraft_isobmff::MasteringDisplay>, cll: Option<(u
 
 /// The frame rate a track's sample durations (in `timescale` units a second) stand for.
 ///
-/// Usually the median duration says it. When the time stamps were rounded to a coarser unit
-/// than the frames need (whole milliseconds, or a 90 kHz clock stepped in milliseconds), the
-/// durations alternate between the two neighbours of the real one and the median is one of
-/// them: 23.976 fps reads as 23.81. Then the mean over the track, which the rounding cannot
-/// move by more than one unit in all, names the rate: the standard rate nearest to it, if one
-/// lies within that uncertainty. A track that has no standard rate either way (a recording at a
-/// variable rate) keeps its median.
+/// When every frame lasts the same, that duration says it. When the time stamps were rounded to
+/// a coarser unit than the frames need (whole milliseconds, a 90 kHz clock stepped in
+/// milliseconds, 600 units a second for 29.97 fps), the durations alternate between the two
+/// neighbours of the real one, and the median is one of them: 23.976 fps reads as 23.81, 29.97
+/// as 30. Then the mean over the track, which the rounding cannot move by more than one unit in
+/// all, names the rate: the standard rate nearest to it, if one lies within that uncertainty.
+/// A track whose mean is near no standard rate (a recording at a variable rate) keeps its median.
 fn nominal_rate(durations: impl Iterator<Item = u32> + Clone, timescale: u32) -> FrameRate {
     let mut first: Vec<u32> = durations.clone().take(240).collect();
     first.sort_unstable();
@@ -122,7 +122,7 @@ fn nominal_rate(durations: impl Iterator<Item = u32> + Clone, timescale: u32) ->
     let median = FrameRate::from_f64(timescale as f64 / d as f64);
     // A rate that rounds to zero (one sample per huge duration) can't be divided by.
     let median = if median.num > 0 && median.den > 0 { median } else { FrameRate::default() };
-    if FrameRate::COMMON.contains(&median) {
+    if first.first() == first.last() {
         return median;
     }
     let (count, total) = durations.take(1_000_000).fold((0u64, 0u64), |(n, sum), d| (n + 1, sum.saturating_add(u64::from(d))));
