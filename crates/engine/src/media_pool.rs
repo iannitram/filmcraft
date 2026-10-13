@@ -428,16 +428,22 @@ impl MediaSource for SlateSource {
         let v = self.info.video.as_ref().ok_or(MediaError::NoStream("video"))?;
         let s = req.scale.clamp(1.0 / 64.0, 1.0);
         let (w, h) = (((v.width as f32 * s).round() as u32).max(2), ((v.height as f32 * s).round() as u32).max(2));
-        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(f) = last.as_ref()
-            && f.width == w
-            && f.height == h
-        {
-            return Ok(Arc::new((**f).clone().with_pts(req.time)));
-        }
-        let px = filmcraft_render::offline::slate_rgba8(w as usize, h as usize, &self.name, self.reason);
-        let f = Arc::new(VideoFrame::rgba8(w, h, px));
-        *last = Some(f.clone());
+        // The lock is held to look and to store, never while the slate is drawn. Drawing runs
+        // parallel loops (rayon), and a pool thread that waits for one of those takes other work
+        // meanwhile: another frame of the same export batch, which asks this source for the same
+        // slate. With the lock held across the drawing, that request waited for a lock its own
+        // thread held and the export stopped for good. Two threads may now draw the first slate
+        // of a size at the same time; the picture is deterministic, so either copy will do.
+        let kept = self.last.lock().unwrap_or_else(|e| e.into_inner()).as_ref().filter(|f| f.width == w && f.height == h).cloned();
+        let f = match kept {
+            Some(f) => f,
+            None => {
+                let px = filmcraft_render::offline::slate_rgba8(w as usize, h as usize, &self.name, self.reason);
+                let f = Arc::new(VideoFrame::rgba8(w, h, px));
+                *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(f.clone());
+                f
+            }
+        };
         Ok(Arc::new((*f).clone().with_pts(req.time)))
     }
     fn audio(&self, _start: i64, frames: usize, sample_rate: u32) -> filmcraft_media::Result<AudioBuffer> {
