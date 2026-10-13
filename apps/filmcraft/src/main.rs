@@ -35,6 +35,7 @@ mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod window_fit; // ours
 mod window_raise;
 
 use args::{Cli, Launch};
@@ -134,6 +135,7 @@ fn main() -> eframe::Result {
         let mut options = native_options(launch.control_port.is_some());
         // Before eframe creates the wgpu instance (e.g. no OpenGL on Windows, see graphics.rs).
         graphics::apply(&mut options, graphics.mode(), backend_override);
+        window_fit::apply(&mut options.viewport); // ours
         let app_created = Arc::new(AtomicBool::new(false));
         let result = eframe::run_native("FilmCraft", options, app_creator(launch.clone(), graphics.clone(), Arc::clone(&app_created)));
         let app_created = app_created.load(Ordering::Relaxed);

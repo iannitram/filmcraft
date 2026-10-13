@@ -56,6 +56,8 @@ winit = { version = "0.30", default-features = false }
 # Settings ▸ Appearance ▸ Sync with system: the XDG desktop portal's colour scheme. The zbus the
 # portal file dialogs (rfd) and accesskit already use.
 zbus = "5.19"
+wayland-client = "0.31" # ours
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] } # ours
 
 # Icon + VERSIONINFO for filmcraft.exe (build.rs); only needed when building on Windows.
 [target.'cfg(windows)'.build-dependencies]

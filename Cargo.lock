@@ -1700,6 +1700,8 @@ dependencies = [
  "rfd",
  "serde_json",
  "sys-locale",
+ "wayland-client",
+ "wayland-protocols",
  "winit",
  "winresource",
  "zbus",
