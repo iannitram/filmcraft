@@ -116,6 +116,14 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                 let (width, height) = frame_size(group, (1920, 1080))?;
                 settings.width = width;
                 settings.height = height;
+                // SD and HDV sequences have non-square pixels ("10,11", "40,33", "4,3"): without
+                // this a 720x480 widescreen sequence opens squeezed
+                if let Some(text) = child_text(group, "PixelAspectRatio") {
+                    match pixel_aspect(text) {
+                        Some(par) => settings.par = par,
+                        None => self.report.warn(format!("Premiere sequence pixel aspect ratio \"{}\" could not be read; square pixels were used", shortened(text, 40))),
+                    }
+                }
                 let (frame_rate, approximate) = rate(self.graph.required_integer(group, &["TrackGroup", "FrameRate"])?)?;
                 settings.frame_rate = frame_rate;
                 if approximate {
@@ -279,7 +287,7 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                     if let Some(reference) = at(item, &["ClipTrackItem", "ComponentOwner", "Components"]) {
                         let chain = self.graph.resolve(reference)?;
                         for component in self.graph.references(chain, &["ComponentChain", "Components"])? {
-                            if let Some(effect) = effects::component(&self.graph, component, Tick::ZERO, sequence_size, source_size, self.report)? {
+                            if let Some(effect) = effects::component(&self.graph, component, Tick::ZERO, sequence_size, source_size, effects::BadValue::ReportAndDefault, self.report)? {
                                 effects::put_effect(&mut imported.effects, effect);
                             }
                         }
@@ -395,6 +403,18 @@ fn rate(period: i64) -> Result<(FrameRate, bool)> {
         return Err(error(PROJECT, "frame rate is out of range"));
     }
     Ok((rate, approximate))
+}
+
+/// `num,den` as a sequence's video track group stores it; `None` for anything else, a zero term
+/// or a ratio beyond what [`filmcraft_project::checked_par`] accepts.
+fn pixel_aspect(text: &str) -> Option<(u32, u32)> {
+    let (num, den) = text.trim().split_once(',')?;
+    filmcraft_project::checked_par((num.trim().parse().ok()?, den.trim().parse().ok()?))
+}
+
+/// At most `max` characters of `text`, for a report line.
+fn shortened(text: &str, max: usize) -> String {
+    text.chars().take(max).collect()
 }
 
 fn sample_rate(period: i64) -> Result<u32> {

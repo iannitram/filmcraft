@@ -238,7 +238,7 @@ fn premiere_hostile_gzip_expansion_is_bounded() {
     }
     let compressed = encoder.finish().unwrap();
     let error = premiere::import_project(&compressed, &ImportOptions::default()).unwrap_err();
-    assert!(error.to_string().contains("64 MiB"));
+    assert!(error.to_string().contains("512 MiB"));
 }
 
 #[test]
@@ -318,4 +318,83 @@ fn premiere_native_volume_converts_linear_gain_to_decibels() {
     let (presets, _) = premiere::import_presets(xml.as_bytes()).unwrap();
     assert_eq!(presets[0].effects[0].effect, "volume");
     assert!((presets[0].effects[0].f64_at("level", Tick::ZERO) + 20.0).abs() < 1e-9);
+}
+
+/// A project the size real long-running ones reach (tens of MiB of XML, millions of nodes) is
+/// inside the limits; the old 64 MiB / two-million-node bounds refused 93 of 291 real projects.
+#[test]
+fn premiere_project_far_larger_than_64_mib_imports() {
+    let filler = "<ArbVideoComponentParam ObjectID=\"9000000\"><Name>pad</Name><StartKeyframe>0,0,0,0,0,0,0,0</StartKeyframe></ArbVideoComponentParam>\n";
+    let mut pad = String::with_capacity(80 * 1024 * 1024);
+    let mut id = 9_000_000_u32;
+    while pad.len() < 72 * 1024 * 1024 {
+        pad.push_str(&filler.replace("9000000", &id.to_string()));
+        id += 1;
+    }
+    assert!(id - 9_000_000 > 400_000, "more objects than the old 200,000 limit");
+    let xml = project_xml().replace("</PremiereData>", &format!("{pad}</PremiereData>"));
+    assert!(xml.len() > 64 * 1024 * 1024);
+    let (imported, _) = premiere::import_project(&gzip(xml.as_bytes()), &ImportOptions::default()).unwrap();
+    assert_eq!(imported.sequences.len(), 1);
+}
+
+#[test]
+fn premiere_sequence_pixel_aspect_is_read() {
+    let sd = |par: &str| {
+        project_xml().replace(
+            "<VideoTrackGroup ObjectID=\"30\"><FrameRect>0,0,1920,1080</FrameRect>",
+            &format!("<VideoTrackGroup ObjectID=\"30\"><FrameRect>0,0,720,480</FrameRect><PixelAspectRatio>{par}</PixelAspectRatio>"),
+        )
+    };
+    for (text, par) in [("40,33", (40, 33)), ("10,11", (10, 11)), ("1,1", (1, 1)), (" 4 , 3 ", (4, 3)), ("80,66", (40, 33))] {
+        let (imported, report) = premiere::import_project(sd(text).as_bytes(), &ImportOptions::default()).unwrap();
+        let settings = &imported.project.sequence(imported.sequences[0]).unwrap().settings;
+        assert_eq!((settings.width, settings.height, settings.par), (720, 480, par), "{text}");
+        assert!(!report.to_string().contains("pixel aspect"), "{report}");
+    }
+    // a value that is no ratio is reported and leaves square pixels: the project still opens
+    for garbage in ["0,0", "40", "1,0", "wide", "1000,1", "40,33,2"] {
+        let (imported, report) = premiere::import_project(sd(garbage).as_bytes(), &ImportOptions::default()).unwrap();
+        assert_eq!(imported.project.sequence(imported.sequences[0]).unwrap().settings.par, (1, 1), "{garbage}");
+        assert!(report.to_string().contains("pixel aspect ratio"), "{garbage}: {report}");
+    }
+    // no PixelAspectRatio at all: square, nothing to report
+    let (imported, report) = premiere::import_project(project_xml().as_bytes(), &ImportOptions::default()).unwrap();
+    assert_eq!(imported.project.sequence(imported.sequences[0]).unwrap().settings.par, (1, 1));
+    assert!(!report.has_warnings(), "{report}");
+}
+
+#[test]
+fn premiere_project_keeps_importing_past_an_unreadable_effect_value() {
+    // one parameter of one effect holds something that is not a number
+    let xml = project_xml().replace("<ParameterID>6</ParameterID><StartKeyframe>-91445760000000000,0.5:0.5,", "<ParameterID>6</ParameterID><StartKeyframe>-91445760000000000,oops:0.5,");
+    let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+    let text = report.to_string();
+    assert!(text.contains("AE.ADBE Motion parameter 6 could not be read"), "{text}");
+    let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+    let motion = video.effect("motion").unwrap();
+    // the readable parameters of the same effect are kept
+    assert_eq!(motion.vec2_at("position", Tick(5 * TPS)), Vec2::new(480.0, 810.0));
+    assert_eq!(motion.param("scale").unwrap().keyframes.len(), 2);
+    // a preset with the same damage is still refused: it would be saved without the value
+    assert!(premiere::import_presets(preset_xml(0).replace("0.25:0.75", "oops:0.75").as_bytes()).is_err());
+}
+
+#[test]
+fn premiere_gaussian_blur_checkbox_sharing_the_blurriness_id_is_told_apart() {
+    // as real project files have it: Blurriness, Blur Dimensions and the Repeat Edge Pixels
+    // checkbox carry ParameterID 1, 2 and 1
+    let blur = r#"<VideoFilterComponent ObjectID="80"><MatchName>AE.ADBE Gaussian Blur 2</MatchName><Component><Params><Param Index="0" ObjectRef="81"/><Param Index="1" ObjectRef="82"/><Param Index="2" ObjectRef="83"/></Params></Component></VideoFilterComponent>
+ <VideoComponentParam ObjectID="81"><ParameterID>1</ParameterID><StartKeyframe>-91445760000000000,24.,0,0,0,0,0,0</StartKeyframe></VideoComponentParam>
+ <VideoComponentParam ObjectID="82"><ParameterID>2</ParameterID><StartKeyframe>-91445760000000000,0,0,0,0,0,0,0</StartKeyframe></VideoComponentParam>
+ <VideoComponentParam ObjectID="83"><ParameterID>1</ParameterID><StartKeyframe>-91445760000000000,true,0,0,0,0,0,0</StartKeyframe></VideoComponentParam>"#;
+    let xml = project_xml()
+        .replace("<Component Index=\"0\" ObjectRef=\"64\"/></Components>", "<Component Index=\"0\" ObjectRef=\"64\"/><Component Index=\"1\" ObjectRef=\"80\"/></Components>")
+        .replace("</PremiereData>", &format!("{blur}</PremiereData>"));
+    let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+    assert!(!report.to_string().contains("could not be read"), "{report}");
+    let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+    let blur = video.effect("gaussian_blur").unwrap();
+    assert_eq!(blur.f64_at("blurriness", Tick::ZERO), 24.0);
+    assert_eq!(blur.param("repeat_edge").map(|p| p.value.clone()), Some(filmcraft_project::ParamValue::Bool(true)));
 }

@@ -58,7 +58,7 @@ pub fn import_presets(bytes: &[u8]) -> Result<(Vec<ImportedPreset>, Report)> {
                 }
                 filmcraft_project::find_effect("cross_dissolve").map(|d| d.instance())
             } else {
-                effects::component(&graph, component, Tick(start), (1920, 1080), (1920, 1080), &mut report)?
+                effects::component(&graph, component, Tick(start), (1920, 1080), (1920, 1080), effects::BadValue::Reject, &mut report)?
             };
             let Some(effect) = effect else { continue };
             let p = preset.get_or_insert_with(|| ImportedPreset {
