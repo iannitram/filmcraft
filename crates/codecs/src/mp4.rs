@@ -374,6 +374,7 @@ impl Mp4Source {
             })
             .collect();
         rebase_unedited_video(&mut file, vtrack, &mut audios);
+        start_edit_at_first_picture(&mut file, vtrack);
         Ok(Self { info, bytes, file, vtrack, video: GopCache::new(explicit_color).with_rotation(rotation).with_crop(aperture), audios })
     }
 
@@ -721,6 +722,32 @@ fn rebase_unedited_video(file: &mut Mp4File, vtrack: Option<usize>, audios: &mut
     }
 }
 
+/// Start an edited video track at its first picture when its edit starts before any picture: the
+/// counterpart of [`rebase_unedited_video`] for a track that has an edit list. A B-frame stream's
+/// first picture sits at its reorder delay on the media timeline, and the edit is there to take
+/// that back (`media_time` = the delay, as ffmpeg, x264 and newer Adobe exports write it). Some
+/// writers leave `media_time` at 0 (measured on H.264 MP4s of a 2016 Adobe Media Encoder: one
+/// frame of composition offset on the first sample, an edit from 0 as long as every picture). To
+/// the letter such a file shows nothing for its first frame and never shows its last picture;
+/// picture 0 was held for two frames and every cut made on the file in another editor fell one
+/// frame late. Premiere, After Effects and ffmpeg (which moves a track back by its earliest
+/// presented timestamp) show the first picture on frame zero.
+///
+/// Only the video track moves: the file's sound already starts where its own edit says. Leading
+/// empty edits are a delay somebody asked for and stay. The gap closed is never more than the
+/// first sample's own composition offset, so a track that really starts late (a fragment cut out
+/// of a longer stream, whose decode times start late too) is left as it is.
+fn start_edit_at_first_picture(file: &mut Mp4File, vtrack: Option<usize>) {
+    let Some(t) = vtrack.and_then(|vi| file.tracks.get_mut(vi)) else { return };
+    let Some(start) = t.edits.iter().map(|e| e.media_time).find(|&m| m != -1) else { return };
+    let Some(first) = t.samples.iter().map(|s| s.pts).min() else { return };
+    let delay = t.samples.first().map_or(0, |s| s.pts.saturating_sub(s.dts));
+    let gap = first.saturating_sub(start);
+    if start >= 0 && gap > 0 && gap <= delay {
+        t.edit_offset = t.edit_offset.saturating_sub(gap);
+    }
+}
+
 /// How long a track plays. With an edit list that is the sum of its edits (ISO/IEC 14496-12
 /// §8.6.6, movie timescale), as `tkhd` records it. The media duration (`mdhd`) runs on the decode
 /// timeline: it is longer than the presentation by the B-frame delay an edit skips (`media_time`, one
@@ -838,6 +865,59 @@ mod tests {
         };
         let seen: Vec<u32> = (0..4).map(luma).collect();
         assert!(seen.windows(2).all(|w| w[0] < w[1]), "one picture per frame, in order: {seen:?}");
+    }
+
+    /// A four-picture 25 fps ProRes MOV (64×32) whose pictures all sit one frame after their decode
+    /// time, as the first picture of a B-frame stream does, and whose video track carries `edits`.
+    /// Picture `k` is a flat grey that gets brighter with `k`.
+    fn delayed_mov_with_edits(edits: Vec<filmcraft_isobmff::Edit>) -> Arc<[u8]> {
+        let mut mux = Mp4Writer::new(std::io::Cursor::new(Vec::new()), WriterOptions::new(Brand::Mov)).expect("writer");
+        let mut cfg = TrackConfig::new(SampleEntry::prores(FourCc(*b"apch"), 64, 32), 25);
+        cfg.edits = edits;
+        let t = mux.add_track(cfg).expect("track");
+        for k in 0..4u16 {
+            let mut fr = filmcraft_prores::Frame::new(64, 32, filmcraft_prores::ChromaFormat::Yuv422, 10, false);
+            fr.y.fill(100 + 200 * k);
+            let data = filmcraft_prores::Encoder::new(filmcraft_prores::Profile::Hq, 64, 32).encode(&fr).expect("encode");
+            mux.write_sample(t, WriteSample { data: &data, duration: 1, composition_offset: 1, is_sync: true }).expect("sample");
+        }
+        mux.finish().expect("finish").into_inner().into()
+    }
+
+    /// An edit that starts before the first picture starts at the first picture. Some H.264 MP4s
+    /// leave the B-frame delay in place: the first sample has one frame of composition offset and
+    /// the edit list still starts at media time 0 (measured on exports of a 2016 Adobe Media
+    /// Encoder, 30 fps, timescale 30000, first offset 1000, `elst` 0). Read to the letter, picture
+    /// 0 was held for two frames, every later picture came one frame late and the last one never
+    /// showed, where Premiere, After Effects and ffmpeg put the first picture on frame zero.
+    #[test]
+    fn an_edit_that_starts_before_the_first_picture_starts_at_it() {
+        use filmcraft_isobmff::Edit;
+        let shown = |src: &Mp4Source, frames: i64| -> Vec<u32> {
+            (0..frames)
+                .map(|k| {
+                    let f = src.video_frame(FrameRequest::full(Tick::from_rational(k, 1, 25))).expect("frame");
+                    let l = f.luma8();
+                    l.iter().map(|&v| u32::from(v)).sum::<u32>() / l.len().max(1) as u32
+                })
+                .collect()
+        };
+        // (movie timescale 1000: a frame is 40)
+        let play = |media_time: i64| Edit { segment_duration: 160, media_time, media_rate: 0x10000 };
+        // the edit takes the delay back itself (ffmpeg, x264, newer Adobe exports): pictures 0 to 3
+        let exact = Mp4Source::open("exact.mov", delayed_mov_with_edits(vec![play(1)])).expect("open");
+        let pictures = shown(&exact, 4);
+        assert!(pictures.windows(2).all(|w| w[0] < w[1]), "one picture per frame, in order: {pictures:?}");
+        // the edit starts at 0 and the first picture is at 1: the same four frames
+        let late = Mp4Source::open("late.mov", delayed_mov_with_edits(vec![play(0)])).expect("open");
+        assert_eq!(late.info().duration, Tick::from_rational(4, 1, 25));
+        assert_eq!(shown(&late, 4), pictures, "the first picture is on frame zero and the last one shows");
+        // a delay somebody asked for (an empty edit of one frame) stays, and the pictures follow it
+        let empty = Edit { segment_duration: 40, media_time: -1, media_rate: 0x10000 };
+        let delayed = Mp4Source::open("delayed.mov", delayed_mov_with_edits(vec![empty, play(0)])).expect("open");
+        assert_eq!(delayed.info().duration, Tick::from_rational(5, 1, 25));
+        let seen = shown(&delayed, 5);
+        assert_eq!(seen.get(1..), Some(pictures.as_slice()), "one frame of delay, then every picture: {seen:?}");
     }
 
     /// Overwrite the big-endian u32 `skip` bytes after the first `fourcc` box type.
