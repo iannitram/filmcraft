@@ -127,7 +127,9 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                 if let Some(text) = child_text(group, "PixelAspectRatio") {
                     match pixel_aspect(text) {
                         Some(par) => settings.par = par,
-                        None => self.report.warn(format!("Premiere sequence pixel aspect ratio \"{}\" could not be read; square pixels were used", shortened(text, 40))),
+                        None => self
+                            .report
+                            .warn(format!("Premiere sequence pixel aspect ratio \"{}\" could not be read; square pixels were used", shortened(text, 40))),
                     }
                 }
                 let (frame_rate, approximate) = rate(self.graph.required_integer(group, &["TrackGroup", "FrameRate"])?)?;
@@ -330,7 +332,15 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                     if let Some(reference) = at(item, &["ClipTrackItem", "ComponentOwner", "Components"]) {
                         let chain = self.graph.resolve(reference)?;
                         for component in self.graph.references(chain, &["ComponentChain", "Components"])? {
-                            if let Some(effect) = effects::component(&self.graph, component, Tick::ZERO, sequence_size, source_size, effects::BadValue::ReportAndDefault, self.report)? {
+                            if let Some(effect) = effects::component(
+                                &self.graph,
+                                component,
+                                Tick::ZERO,
+                                sequence_size,
+                                source_size,
+                                effects::BadValue::ReportAndDefault,
+                                self.report,
+                            )? {
                                 effects::put_effect(&mut imported.effects, effect);
                             }
                         }
@@ -392,9 +402,20 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
         let name = text_at(node, &["TransitionTrackItem", "MatchName"]).unwrap_or("");
         let effect = match name {
             "AE.ADBE Cross Dissolve New" | "Cross Dissolve" => "cross_dissolve",
+            // dissolves without controls of their own; older projects name them "ADBE …"
+            "AE.ADBE Dip To Black" | "ADBE Dip To Black" => "dip_to_black",
+            "AE.ADBE Dip To White" | "ADBE Dip To White" => "dip_to_white",
+            "ADBE Additive Dissolve" => "additive_dissolve",
+            "ADBE Film Dissolve" => "film_dissolve",
             "Constant Power" => "constant_power",
             "Constant Gain" => "constant_gain",
             "Exponential Fade" => "exponential_fade",
+            "Custom Fade" => {
+                let stand_in = custom_fade(child_text(node, "FadeShapeType"), child_text(node, "FadeShapeValue"));
+                let label = find_effect(stand_in).map_or(stand_in, |d| d.name);
+                self.report.warn(format!("Premiere audio transition \"Custom Fade\" was imported as {label}; its own fade curve is not carried over"));
+                stand_in
+            }
             _ => {
                 self.report.warn(format!("Premiere transition \"{name}\" is not supported and was skipped"));
                 return Ok(None);
@@ -431,6 +452,27 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
             },
             reverse: false,
         }))
+    }
+}
+
+/// The FilmCraft audio transition nearest to a "Custom Fade", the audio crossfade with an
+/// adjustable curve that newer projects write. It stores a shape type and a shape value, and the
+/// same files store the three named fades with them too: Constant Gain as type 0, value 0;
+/// Exponential Fade as type 0, value -35; Constant Power as type 1, value 19. A custom fade takes
+/// the named fade of its own type whose value is nearer. Anything unreadable is a Constant Power
+/// fade, the application's default.
+fn custom_fade(shape_type: Option<&str>, shape_value: Option<&str>) -> &'static str {
+    let number = |text: Option<&str>| text.and_then(|t| t.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
+    match (number(shape_type), number(shape_value)) {
+        (Some(kind), Some(value)) if kind == 0.0 => {
+            if value < -17.5 {
+                "exponential_fade"
+            } else {
+                "constant_gain"
+            }
+        }
+        (Some(kind), Some(value)) if kind == 1.0 && value < 9.5 => "constant_gain",
+        _ => "constant_power",
     }
 }
 
