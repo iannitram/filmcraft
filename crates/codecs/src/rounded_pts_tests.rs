@@ -134,3 +134,37 @@ fn webm_with_1ms_timestamps_shows_every_frame_once() {
 fn mp4_with_a_1ms_timescale_shows_every_frame_once() {
     check("mov", mp4_1ms);
 }
+
+/// A file whose time stamps were rounded says its real frame rate, not the rate of one of the two
+/// durations the rounding left behind (23.976 fps read as 23.81, 29.97 as 30.3).
+#[test]
+fn mp4_with_a_1ms_timescale_reports_its_real_frame_rate() {
+    for rate in RATES {
+        for stamp in [Stamp::Nearest, Stamp::Floor] {
+            let src = crate::open_bytes("synthetic.mov", mp4_1ms(rate, stamp)).unwrap();
+            assert_eq!(src.info().frame_rate(), rate, "{rate}, {stamp:?} ms stamps");
+        }
+    }
+}
+
+/// The same on a clock that is nearly fine enough: at 600 units a second a 29.97 fps frame lasts
+/// 20 units with a 21 now and then, and the median alone says 30 fps.
+#[test]
+fn mp4_whose_median_duration_names_a_neighbouring_rate_reports_its_real_frame_rate() {
+    let rate = FrameRate::FPS_29_97;
+    // the start of frame `k` in units of 1/600 s, to the nearest unit
+    let unit = |k: i64| (2 * k * 600 * rate.den + rate.num) / (2 * rate.num);
+    let mut w = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mov)).unwrap();
+    let t = w.add_track(TrackConfig::new(SampleEntry::jpeg((BITS * BLOCK) as u16, BLOCK as u16), 600)).unwrap();
+    let mut durations = Vec::new();
+    for k in 0..150i64 {
+        let duration = (unit(k + 1) - unit(k)) as u32;
+        durations.push(duration);
+        w.write_sample(t, WriteSample { data: &picture(k as usize), duration, composition_offset: 0, is_sync: true }).unwrap();
+    }
+    durations.sort_unstable();
+    assert_eq!((durations[0], durations[75], durations[149]), (20, 20, 21), "mostly 20, a few 21");
+    let bytes: Arc<[u8]> = w.finish().unwrap().into_inner().into();
+    let src = crate::open_bytes("synthetic.mov", bytes).unwrap();
+    assert_eq!(src.info().frame_rate(), rate);
+}
