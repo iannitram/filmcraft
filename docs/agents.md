@@ -16,7 +16,7 @@ FilmCraft from an agent. Part 2 covers developing FilmCraft as an agent.
 
 Headless mode also takes `--data-dir DIR` (user presets) and `--no-hardware` (software decoding
 and encoding only: the headless engine reads no preferences file, so this is its Hardware decoding
-switch). Any other option is rejected (exit 2):
+switch; `FILMCRAFT_NO_HARDWARE=1` in the environment does the same). Any other option is rejected (exit 2):
 there are no folder-confinement flags such as `--automation-read-root`, so the server can read
 and write wherever the user can.
 
