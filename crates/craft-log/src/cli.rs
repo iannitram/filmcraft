@@ -158,10 +158,13 @@ pub fn installed() -> Option<&'static CliLogger> {
     CLI.get()
 }
 
-/// The program's arguments with the home folder shown as `~`.
+/// The program's arguments with the home folder shown as `~`. Read with `args_os`: `args` panics
+/// on an argument that is not Unicode (a Latin-1 file name on Linux), which would turn a usage
+/// error into a crash; such bytes show as U+FFFD.
 fn args_masked() -> String {
     let home = std::env::var("HOME").ok().filter(|h| h.len() > 1);
-    std::env::args()
+    std::env::args_os()
+        .map(|a| a.to_string_lossy().into_owned())
         .map(|a| match &home {
             Some(h) => a.replace(h.as_str(), "~"),
             None => a,
