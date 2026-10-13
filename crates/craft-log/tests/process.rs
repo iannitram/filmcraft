@@ -16,6 +16,8 @@ fn main() {
     }
     let cases: &[(&str, fn())] = &[
         ("a_non_unicode_argument_is_logged_not_a_panic", a_non_unicode_argument_is_logged_not_a_panic),
+        ("a_failing_command_with_standard_error_full_exits_1", a_failing_command_with_standard_error_full_exits_1),
+        ("a_failing_test_capture_with_standard_error_full_does_not_abort", a_failing_test_capture_with_standard_error_full_does_not_abort),
     ];
     let filter = std::env::args().skip(1).find(|a| !a.starts_with('-'));
     let mut failed = Vec::new();
@@ -43,6 +45,20 @@ fn child(role: &str) {
             let _ = craft_log::cli::install(&APP, dir.as_deref());
             log::warn!(target: "app", "child ran");
             log::logger().flush();
+        }
+        "fail" => {
+            let _ = craft_log::cli::install(&APP, dir.as_deref());
+            craft_log::cli::failed(&APP, "the reason it failed");
+            std::process::exit(1);
+        }
+        "capture-panic" => {
+            let r = std::thread::spawn(|| {
+                let _log = craft_log::testing::capture();
+                log::error!(target: "app", "the reason the test failed");
+                panic!("deliberate");
+            })
+            .join();
+            assert!(r.is_err());
         }
         other => panic!("unknown role {other}"),
     }
@@ -76,5 +92,27 @@ fn a_non_unicode_argument_is_logged_not_a_panic() {
         assert!(log.contains("f\u{fffd}.mov"), "{log}");
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+/// Fault 2: `eprintln!` panics when standard error cannot be written, so a failing command with
+/// standard error full (`2>/dev/full`) or closed exited 101 instead of 1.
+fn a_failing_command_with_standard_error_full_exits_1() {
+    let Ok(full) = std::fs::OpenOptions::new().write(true).open("/dev/full") else { return };
+    let dir = temp_dir("devfull");
+    let status = me("fail", &dir).stdout(Stdio::null()).stderr(full).status().unwrap();
+    assert_eq!(status.code(), Some(1), "{status}");
+    let log = std::fs::read_to_string(dir.join("app-cli.log")).unwrap();
+    assert!(log.contains("the reason it failed"), "{log}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Fault 2, the test helper: a failing test's capture printed its lines with `eprint!` from a
+/// destructor running during the panic; a second panic there aborts the whole process.
+fn a_failing_test_capture_with_standard_error_full_does_not_abort() {
+    let Ok(full) = std::fs::OpenOptions::new().write(true).open("/dev/full") else { return };
+    let dir = temp_dir("capture");
+    let status = me("capture-panic", &dir).stdout(Stdio::null()).stderr(full).status().unwrap();
+    assert_eq!(status.code(), Some(0), "{status}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 

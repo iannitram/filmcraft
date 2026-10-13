@@ -189,7 +189,8 @@ pub fn report_failure() {
     let Some(logger) = installed() else { return };
     log::Log::flush(logger);
     if let Some(p) = logger.path() {
-        eprintln!("log: {}", p.display());
+        // not eprintln!, which panics (exit 101) when standard error is full or closed
+        let _ = writeln!(std::io::stderr(), "log: {}", p.display());
     }
 }
 
