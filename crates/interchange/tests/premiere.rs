@@ -811,6 +811,28 @@ const TITLE_JSON: &str = r#"{"mTextParam":{"mAlignment":1,"mLeading":0,"mLigatur
   "mStrokeVisible":{"mParamValues":[[0,true]]},"mStrokeWidth":{"mParamValues":[[0,4]]},"mStrokeColor":{"mParamValues":[[0,0]]},
   "mTracking":{"mParamValues":[[0,20]]},"mFauxBold":{"mParamValues":[[0,true]]},"mCapsOption":{"mParamValues":[[0,1]]}}},"mVersion":1}"#;
 
+/// Source Text numbers the alignments left 0, right 1, centre 2; FilmCraft's choices run Left,
+/// Center, Right. A right-aligned title must not come in centred on its right end (half of it
+/// past the edge of the frame), nor a centred one right-aligned on the middle.
+#[test]
+fn premiere_text_alignment_numbers_are_left_right_centre() {
+    use filmcraft_project::ParamValue;
+    for (written, expected, name) in [(0, 0u32, "Left"), (1, 2, "Right"), (2, 1, "Center")] {
+        let json = TITLE_JSON.replace("\"mAlignment\":1", &format!("\"mAlignment\":{written}"));
+        assert!(json.contains(&format!("\"mAlignment\":{written}")));
+        let xml = project_with_text_layer(&source_text_json(&json));
+        let (imported, _) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+        let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+        let layer = video.graphic_layers().next().unwrap();
+        let got = match &layer.param("align").unwrap().value {
+            ParamValue::Choice(v) => *v,
+            other => panic!("align: {other:?}"),
+        };
+        assert_eq!(got, expected, "alignment {written} in the file is {name}");
+        assert_eq!(filmcraft_project::graphic::ALIGN_OPTS[got as usize], name);
+    }
+}
+
 /// A title typed in the application is a graphic clip with a text layer here: the words, the
 /// font, the size, the colours and the layer's place come across, the clip is switched on and
 /// starts at its canvas's own start.
@@ -845,7 +867,7 @@ fn premiere_text_of_a_graphic_becomes_a_text_layer() {
     assert_eq!((text("text").as_str(), text("font").as_str(), text("font_style").as_str()), ("A synthetic title", "Example Sans", "Bold"));
     assert_eq!(layer.f64_at("size", Tick::ZERO), 77.5);
     assert_eq!(layer.f64_at("tracking", Tick::ZERO), 20.0);
-    assert!(matches!(layer.param("align").unwrap().value, ParamValue::Choice(1)), "centred");
+    assert!(matches!(layer.param("align").unwrap().value, ParamValue::Choice(2)), "the file's 1 is right-aligned");
     assert!(matches!(layer.param("caps").unwrap().value, ParamValue::Choice(1)), "all caps");
     assert!(matches!(layer.param("faux_bold").unwrap().value, ParamValue::Bool(true)));
     assert!(matches!(layer.param("fill_color").unwrap().value, ParamValue::Color(c) if c == [1.0, 0.0, 0.0, 1.0]), "{:?}", layer.param("fill_color"));
@@ -1116,7 +1138,7 @@ fn premiere_text_in_the_binary_form_becomes_a_text_layer() {
     };
     assert_eq!((text("text").as_str(), text("font").as_str(), text("font_style").as_str()), ("Two fonts", "Example Serif", "Bold"));
     assert_eq!(layer.f64_at("size", Tick::ZERO), 70.0);
-    assert!(matches!(layer.param("align").unwrap().value, ParamValue::Choice(1)));
+    assert!(matches!(layer.param("align").unwrap().value, ParamValue::Choice(2)), "the file's 1 is right-aligned");
     // a colour channel that is not written is 255
     assert!(
         matches!(layer.param("fill_color").unwrap().value, ParamValue::Color(c) if c == [236.0 / 255.0, 246.0 / 255.0, 1.0, 1.0]),
