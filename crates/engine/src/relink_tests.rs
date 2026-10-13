@@ -270,3 +270,61 @@ fn jobs_list_reports_an_exports_offline_media() {
     assert_eq!(j["offlineMedia"][0]["item"], json!(items[1].0), "{j}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A Premiere project names files at the paths of the machine that saved it. After import they
+/// are missing, not "made offline", so one folder mapping relinks them.
+#[test]
+fn imported_premiere_media_is_missing_and_relinks_by_folder_mapping() {
+    let root = tmp_dir("relink-premiere");
+    let new_home = root.join("Library").join("Episodes");
+    std::fs::create_dir_all(&new_home).unwrap();
+    make_movie(&new_home.join("example.mov"), DemoScene::Aurora, W, H, 12);
+    let tps = filmcraft_time::TICKS_PER_SECOND;
+    // one clip of `D:\Show\Episodes\example.mov`, a path that exists nowhere here, and one
+    // graphic made inside the application (no file behind it)
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<PremiereData Version="3">
+ <Project ObjectRef="1"/>
+ <Project ObjectID="1"><RootProjectItem ObjectURef="root"/></Project>
+ <RootProjectItem ObjectUID="root"><ProjectItem><Name>Root</Name></ProjectItem><ProjectItemContainer><Items>
+  <Item Index="0" ObjectURef="movie-item"/><Item Index="1" ObjectURef="graphic-item"/>
+ </Items></ProjectItemContainer></RootProjectItem>
+ <ClipProjectItem ObjectUID="movie-item"><ProjectItem><Name>example.mov</Name></ProjectItem><MasterClip ObjectURef="movie-master"/></ClipProjectItem>
+ <ClipProjectItem ObjectUID="graphic-item"><ProjectItem><Name>Graphic</Name></ProjectItem><MasterClip ObjectURef="graphic-master"/></ClipProjectItem>
+ <MasterClip ObjectUID="movie-master"><Name>example.mov</Name><Clips><Clip Index="0" ObjectRef="20"/></Clips></MasterClip>
+ <MasterClip ObjectUID="graphic-master"><Name>Graphic</Name><Clips><Clip Index="0" ObjectRef="21"/></Clips></MasterClip>
+ <VideoClip ObjectID="20"><Clip><Source ObjectRef="22"/></Clip></VideoClip>
+ <VideoClip ObjectID="21"><Clip><Source ObjectRef="23"/></Clip></VideoClip>
+ <VideoMediaSource ObjectID="22"><MediaSource><Media ObjectURef="movie"/></MediaSource></VideoMediaSource>
+ <VideoMediaSource ObjectID="23"><MediaSource><Media ObjectURef="graphic"/></MediaSource></VideoMediaSource>
+ <Media ObjectUID="movie"><FilePath>D:\Show\Episodes\example.mov</FilePath><VideoStream ObjectRef="40"/></Media>
+ <Media ObjectUID="graphic"><FilePath>1196574294</FilePath><Title>Graphic</Title><Infinite>true</Infinite><VideoStream ObjectRef="41"/></Media>
+ <VideoStream ObjectID="40"><FrameRate>{frame}</FrameRate><FrameRect>0,0,{W},{H}</FrameRect><Duration>{half}</Duration></VideoStream>
+ <VideoStream ObjectID="41"><FrameRate>{frame}</FrameRate><FrameRect>0,0,{W},{H}</FrameRect><Duration>{half}</Duration></VideoStream>
+</PremiereData>"#,
+        frame = tps / 24,
+        half = tps / 2
+    );
+    let project = root.join("old-project.prproj");
+    std::fs::write(&project, xml).unwrap();
+    let mut s = Session::default();
+    let r = s.execute("file.import", json!({"paths": [project.to_string_lossy()]})).unwrap();
+    assert_eq!(r["documents"][0]["format"], "Premiere Pro project", "{r}");
+    assert_eq!(r["documents"][0]["linkedMedia"], 0, "{r}");
+
+    let missing = s.execute("media.findMissing", json!({})).unwrap();
+    let rows = missing["missing"].as_array().unwrap();
+    let status_of = |name: &str| rows.iter().find(|m| m["name"] == name).map(|m| m["status"].clone());
+    assert_eq!(status_of("example.mov"), Some(json!("missing")), "a file that is only somewhere else: {missing}");
+    assert_eq!(status_of("Graphic"), Some(json!("offline")), "nothing to look for: {missing}");
+
+    // one mapping, old root to new root, with the old side in the other OS's spelling
+    let r = s.execute("media.autoRelink", json!({"from": r"D:\Show", "to": root.join("Library").to_string_lossy()})).unwrap();
+    assert_eq!(r["relinked"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(r["failed"], json!([]), "{r}");
+    let after = s.execute("media.findMissing", json!({})).unwrap();
+    let rows = after["missing"].as_array().unwrap();
+    assert!(rows.iter().all(|m| m["name"] != "example.mov"), "{after}");
+    let _ = std::fs::remove_dir_all(&root);
+}
