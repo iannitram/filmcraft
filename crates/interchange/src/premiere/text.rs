@@ -129,7 +129,7 @@ pub(super) fn layer(
         set("stroke_color", ParamValue::Color(c));
     }
     let of = |key: &str| text_param.get(key);
-    if let Some(v) = of("mAlignment").and_then(choice(ALIGN_OPTS.len())) {
+    if let Some(v) = of("mAlignment").and_then(alignment) {
         set("align", ParamValue::Choice(v));
     }
     if let Some(v) = of("mLeading").and_then(number) {
@@ -527,6 +527,20 @@ fn number(value: &Value) -> Option<f64> {
 /// A choice stored as a small number, when it is one of `options` choices.
 fn choice(options: usize) -> impl Fn(&Value) -> Option<u32> {
     move |value| value.as_u64().filter(|v| (*v as usize) < options).map(|v| v as u32)
+}
+
+/// The alignment of a graphic's text as a FilmCraft `align` choice. Source Text numbers them
+/// left 0, right 1, centre 2; FilmCraft's list runs Left, Center, Right, so the last two change
+/// places. Observed in user-authored project files, in both forms of Source Text: the layers
+/// numbered 1 have their Position in the last tenth of the frame width or past it (a right
+/// margin), and those numbered 2 have it on the middle of the frame. A number past those is
+/// taken as it stands.
+fn alignment(value: &Value) -> Option<u32> {
+    Some(match choice(ALIGN_OPTS.len())(value)? {
+        1 => 2,
+        2 => 1,
+        other => other,
+    })
 }
 
 /// A colour stored as one 24-bit number, read as red, green, blue from the high byte down.
