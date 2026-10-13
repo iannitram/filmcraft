@@ -188,11 +188,11 @@ fn graded_stats(img: &Image, base: &EffectInstance, x: &[f32; 10], skin_protect:
         t: Tick::ZERO,
         px_scale: g.w as f32 / 1920.0,
         seconds: 0.0,
-        frame_rate: 24.0,
         timecode: "",
         clip_name: "",
         project: None,
         env: None,
+        frame_rate: 24.0,
         working: filmcraft_color::WorkingSpace::Rec709,
     };
     apply(&mut g, &set_params(base, x), &cx);
@@ -358,11 +358,11 @@ mod tests {
             t: Tick::ZERO,
             px_scale: 0.1,
             seconds: 0.0,
-            frame_rate: 24.0,
             timecode: "",
             clip_name: "",
             project: None,
             env: None,
+            frame_rate: 24.0,
             working: filmcraft_color::WorkingSpace::Rec709,
         };
         apply(&mut g, &set_params(base, &x), &cx);
