@@ -1207,10 +1207,10 @@ fn project_with_legacy_title(prefs: &str) -> String {
     xml
 }
 
-/// A title made in the Title Designer becomes a graphic clip with one text layer for its block
-/// of text: the words with their line break, the font, size, fill, edge and shadow of its first
-/// characters, its alignment point on the first baseline (moved to where a 1280x720 title sits
-/// in a 1920x1080 frame), and a style run for the characters that look different.
+/// A title made in the Title Designer becomes a graphic clip with one text layer for each line
+/// of its text: the words, the font, size, fill, edge and shadow of the line's first characters,
+/// the line's alignment point on its own baseline (moved to where a 1280x720 title sits in a
+/// 1920x1080 frame), and a style run for the characters that look different.
 #[test]
 fn premiere_legacy_title_becomes_a_text_layer() {
     use filmcraft_project::{CharStyle, ParamValue, StyleRun};
@@ -1231,17 +1231,17 @@ fn premiere_legacy_title_becomes_a_text_layer() {
         assert!(matches!(imported.project.item(video.item).unwrap().kind, ItemKind::Graphic { width: 1920, height: 1080, .. }));
         assert_eq!((video.start, video.duration, video.source_in), (Tick::ZERO, Tick(2 * TPS), Tick::ZERO));
         let layers: Vec<_> = video.graphic_layers().collect();
-        assert_eq!(layers.len(), 1);
+        assert_eq!(layers.len(), 2, "one for each line");
         let layer = layers[0];
-        let text = |id: &str| match &layer.param(id).unwrap().value {
+        let text = |layer: &filmcraft_project::EffectInstance, id: &str| match &layer.param(id).unwrap().value {
             ParamValue::Text(s) => s.clone(),
             other => panic!("{id}: {other:?}"),
         };
-        assert_eq!((text("text").as_str(), text("font").as_str(), text("font_style").as_str()), ("Big small\nbelow", "Example Sans", "Bold"));
+        assert_eq!((text(layer, "text").as_str(), text(layer, "font").as_str(), text(layer, "font_style").as_str()), ("Big small", "Example Sans", "Bold"));
         assert_eq!(layer.f64_at("size", Tick::ZERO), 80.0);
         assert!(matches!(layer.param("align").unwrap().value, ParamValue::Choice(1)), "centred");
         assert!(matches!(layer.param("caps").unwrap().value, ParamValue::Choice(2)), "small capitals");
-        // the middle of the block (200 + 400 / 2) on the first baseline, in a frame 640x360 larger
+        // the middle of the block (200 + 400 / 2) on the line's baseline, in a frame 640x360 larger
         assert_eq!(layer.vec2_at("position", Tick::ZERO), Vec2::new(400.0 + 320.0, 360.0 + 180.0));
         assert!(matches!(layer.param("fill").unwrap().value, ParamValue::Bool(true)));
         assert!(matches!(layer.param("fill_color").unwrap().value, ParamValue::Color(c) if c == [1.0, 1.0, 0.0, 1.0]), "{:?}", layer.param("fill_color"));
@@ -1261,7 +1261,7 @@ fn premiere_legacy_title_becomes_a_text_layer() {
             ),
             (12.0, 135.0, 3.0, 30.0)
         );
-        // "small" and the end of its line: the other font, half the size, red, no small capitals
+        // "small": the other font, half the size, red, no small capitals
         let runs = &layer.layer.as_ref().expect("a style run").runs;
         let other = CharStyle {
             font: Some("Example Serif".into()),
@@ -1271,9 +1271,15 @@ fn premiere_legacy_title_becomes_a_text_layer() {
             caps: Some(0),
             ..Default::default()
         };
-        assert_eq!(runs, &[StyleRun { start: 4, end: 10, style: other }]);
+        assert_eq!(runs, &[StyleRun { start: 4, end: 9, style: other }]);
         let spec = filmcraft_project::graphic::eval_layer(layer, Tick::ZERO, (1920, 1080)).expect("a text layer");
-        assert!(matches!(&spec.content, filmcraft_project::graphic::LayerContent::Text(t) if t.text == "Big small\nbelow" && t.size == 80.0));
+        assert!(matches!(&spec.content, filmcraft_project::graphic::LayerContent::Text(t) if t.text == "Big small" && t.size == 80.0));
+        // the second line: its own layer on its own baseline, 80 lower, in one style
+        let second = layers[1];
+        assert_eq!((text(second, "text").as_str(), text(second, "font").as_str()), ("below", "Example Sans"));
+        assert_eq!(second.vec2_at("position", Tick::ZERO), Vec2::new(400.0 + 320.0, 440.0 + 180.0));
+        assert_eq!(second.f64_at("size", Tick::ZERO), 80.0);
+        assert!(second.layer.as_ref().is_none_or(|extra| extra.runs.is_empty()));
         // the sound of the same source has nothing to play: it stays as it was, switched off
         assert!(!sequence.audio_tracks[0].items[0].enabled);
     }
@@ -1334,4 +1340,88 @@ fn premiere_legacy_title_that_is_damaged_never_panics_and_stays_a_placeholder() 
     // a title without words has no layer: the clip stays switched off
     let empty = LEGACY_TITLE.replace("<TRString>Big small</TRString>", "<TRString> </TRString>").replace("<TRString>below</TRString>", "<TRString></TRString>");
     assert_eq!(import(&element(&legacy_title_prefs(&empty))), (false, 0));
+}
+
+/// A colour matte or black video made inside the application is a generator here: it has no
+/// file and needs none, its clip is shown, and the clip starts at the generator's own start with
+/// its keyframes moved along. A matte whose colour cannot be read stays a placeholder.
+#[test]
+fn premiere_colour_matte_and_black_video_are_generators() {
+    use filmcraft_media::Generator;
+    use filmcraft_project::MediaRef;
+    let with = |code: &str, title: &str, prefs: &str| {
+        let xml = project_xml().replace(
+            "<Media ObjectUID=\"movie\"><FilePath>/media/example.mov</FilePath>",
+            &format!("<Media ObjectUID=\"movie\"><FilePath>{code}</FilePath><Title>{title}</Title><Infinite>true</Infinite>{prefs}"),
+        );
+        assert_ne!(xml, project_xml());
+        premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap()
+    };
+    // red 255, green 0, blue 51, then the rest of the value as the files have it
+    let colour = format!("<ImporterPrefs Encoding=\"base64\">{}</ImporterPrefs>", base64(&[0xff, 0x00, 0x33, 0x00, 1, 0, 0, 0]));
+    for (code, title, prefs, want) in [
+        ("1129270354", "Color Matte", colour.as_str(), Generator::ColorMatte { color: [1.0, 0.0, 0.2, 1.0] }),
+        ("1112293707", "Black Video", "", Generator::BlackVideo),
+    ] {
+        let (imported, report) = with(code, title, prefs);
+        let said = report.to_string();
+        assert!(said.contains("imported as FilmCraft generators"), "{title}: {said}");
+        assert!(!said.contains("offline placeholder"), "{title}: {said}");
+        let sequence = imported.project.sequence(imported.sequences[0]).unwrap();
+        let video = &sequence.video_tracks[0].items[0];
+        assert!(video.enabled, "{title} is shown");
+        let media = imported.project.item(video.item).unwrap().as_media().unwrap();
+        assert!(matches!(&media.media, MediaRef::Generator(g) if *g == want), "{title}: {:?}", media.media);
+        assert!(!media.offline, "{title}: a generator is never missing");
+        let size = media.info.video.as_ref().map(|v| (v.width, v.height));
+        assert_eq!(size, Some((1920, 1080)), "{title}: the size the file gives it");
+        assert_eq!((video.start, video.duration, video.source_in, video.speed), (Tick::ZERO, Tick(2 * TPS), Tick::ZERO, 1.0), "{title}");
+        // the clip's Motion keyframes were at 5 s and 7 s of a source without end
+        let scale = video.effect("motion").unwrap().param("scale").unwrap();
+        assert_eq!(scale.keyframes.iter().map(|k| k.time).collect::<Vec<_>>(), [Tick::ZERO, Tick(2 * TPS)], "{title}");
+        assert!(!sequence.audio_tracks[0].items[0].enabled, "{title} has no sound");
+    }
+    // a matte without its colour, or with too little of it, is left as it was: a switched-off placeholder
+    for prefs in ["", "<ImporterPrefs Encoding=\"base64\">/w==</ImporterPrefs>", "<ImporterPrefs Encoding=\"base64\">***</ImporterPrefs>"] {
+        let (imported, report) = with("1129270354", "Color Matte", prefs);
+        let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+        assert!(!video.enabled, "{prefs}");
+        assert!(report.to_string().contains("offline placeholder"), "{prefs}");
+    }
+}
+
+/// A title laid out for pixels that are not square says so (`pSCREENAR`, one over the pixel
+/// aspect). In a sequence of the same pixels its letters are drawn that much narrower, so they
+/// have their shape when the frame is shown, and every line stays where it was. In a sequence of
+/// square pixels the letters are as they are and the title is that much wider about the middle.
+#[test]
+fn premiere_legacy_title_for_widescreen_pixels_keeps_its_shape() {
+    use filmcraft_project::ParamValue;
+    let document =
+        LEGACY_TITLE.replace("<pXPIXELS>1280</pXPIXELS><pYLINES>720</pYLINES>", "<pXPIXELS>720</pXPIXELS><pYLINES>480</pYLINES><pSCREENAR>0.825</pSCREENAR>");
+    assert_ne!(document, LEGACY_TITLE);
+    let prefs = format!("<ImporterPrefs Encoding=\"base64\">{}</ImporterPrefs>", base64(&legacy_title_prefs(&document)));
+    let first_layer = |xml: &str| {
+        let (imported, _) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+        let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+        video.graphic_layers().next().expect("a text layer").clone()
+    };
+    // the same pixels as the title's: a 720x480 widescreen sequence (40:33)
+    let same = project_with_legacy_title(&prefs).replace(
+        "<VideoTrackGroup ObjectID=\"30\"><FrameRect>0,0,1920,1080</FrameRect>",
+        "<VideoTrackGroup ObjectID=\"30\"><FrameRect>0,0,720,480</FrameRect><PixelAspectRatio>40,33</PixelAspectRatio>",
+    );
+    assert!(same.contains("40,33"));
+    let layer = first_layer(&same);
+    let place = layer.vec2_at("position", Tick::ZERO);
+    assert!((place.x - 400.0).abs() < 0.01 && (place.y - 360.0).abs() < 0.01, "where the title has it: {place:?}");
+    assert!(matches!(layer.param("uniform_scale").unwrap().value, ParamValue::Bool(false)));
+    assert!((layer.f64_at("scale_width", Tick::ZERO) - 82.5).abs() < 0.01, "{}", layer.f64_at("scale_width", Tick::ZERO));
+    assert_eq!(layer.f64_at("scale", Tick::ZERO), 100.0);
+    // square pixels, 1920x1080: the title's picture is 1.2121 times as wide about the middle
+    let layer = first_layer(&project_with_legacy_title(&prefs));
+    let place = layer.vec2_at("position", Tick::ZERO);
+    let want = 960.0 + (400.0 - 360.0) / 0.825;
+    assert!((place.x - want).abs() < 0.01 && (place.y - (360.0 + 300.0)).abs() < 0.01, "{place:?} against {want}");
+    assert!(matches!(layer.param("uniform_scale").unwrap().value, ParamValue::Bool(true)), "letters as they are");
 }
