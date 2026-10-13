@@ -118,7 +118,12 @@ fn render_batch(pipe: &Pipeline, f: i64, end: i64, sources: &dyn SourceProvider)
     let frames: Vec<Frame> = (f..end)
         .into_par_iter()
         .map(|fi| {
+            // ours (self-logging): one scope per frame, so a stall names the frame, its step and its pool thread
+            let job = craft_stage::scope("export.frame");
+            let facts = [("frame", fi as f64), ("worker", rayon::current_thread_index().map_or(-1.0, |i| i as f64))];
+            job.stage_with("render: start", &facts);
             let frame = pipe.frame(fi, sources);
+            job.stage_with("render: done", &facts);
             if filmcraft_media::pending::take() {
                 pending.store(true, Ordering::Relaxed);
             }
@@ -457,7 +462,11 @@ impl Exporter {
             return Err(ExportError::Cancelled);
         }
         let _ = filmcraft_media::pending::take();
+        // ours (self-logging): the calling thread's side of one step (encode, audio, mux, waiting for the pool)
+        let _job = craft_stage::scope("export.step");
+        craft_stage::stage_with("step: begin", &[("next", self.next as f64), ("end", self.f1 as f64)]);
         if !self.measured {
+            craft_stage::stage("audio: measure loudness");
             if !self.settings.part_of_batch {
                 progress.set_status("Measuring loudness");
             }
@@ -489,6 +498,7 @@ impl Exporter {
             return Ok(Step::Progress);
         }
         let finishing = web_time::Instant::now();
+        craft_stage::stage("finish: the rest of the audio, flush, write the container");
         let mixed = self.audio.as_mut().and_then(|a| a.rest(sources));
         if filmcraft_media::pending::take() {
             return Ok(Step::Pending);
@@ -544,6 +554,7 @@ impl Exporter {
             Some(a) if a.first == self.next => (a.first, a.frames),
             _ => {
                 let (f, end) = (self.next, self.next.saturating_add(self.batch_len()).min(self.f1));
+                craft_stage::stage_with("render this batch on the pool (none was rendered ahead)", &[("first", f as f64), ("end", end as f64)]);
                 let pipe = &self.pipe;
                 match timed(Stage::Render, || render_batch(pipe, f, end, sources)) {
                     Some(frames) => (f, frames),
@@ -577,6 +588,7 @@ impl Exporter {
             });
             let r = self.encode_batch(f, frames, sources);
             encode_done = Some(web_time::Instant::now());
+            craft_stage::stage_with("wait for the pool to finish the batch rendered ahead", &[("first", a as f64), ("end", b as f64)]);
             r
         });
         // the scope returned only now: what is left since the encoding ended is waiting for the render
@@ -619,6 +631,7 @@ impl Exporter {
             let t = web_time::Instant::now();
             for &g in &cuts {
                 let until = self.sample_at_frame(g, sr);
+                craft_stage::stage_with("audio: pull and mix (reads the sources)", &[("up to frame", g as f64)]);
                 mixed.push(self.audio.as_mut().and_then(|a| a.pull(until, sources)));
             }
             note_stage(Stage::Audio, t.elapsed());
@@ -630,9 +643,11 @@ impl Exporter {
         let mut mixed = mixed.into_iter();
         for (k, frame) in frames.into_iter().enumerate() {
             let fi = f + k as i64;
+            craft_stage::stage_with("video: encode a frame", &[("frame", fi as f64)]);
             let packets = timed(Stage::Encode, || self.encode(std::slice::from_ref(&frame), fi))?;
             self.queued.extend(packets);
             if cuts.contains(&(fi + 1)) {
+                craft_stage::stage_with("mux: write video, then encode and write audio", &[("frame", fi as f64)]);
                 timed(Stage::Mux, || -> Result<()> {
                     if self.mux.is_none() && self.mxf.is_none() {
                         self.open_mux()?;

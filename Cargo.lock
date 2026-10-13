@@ -1951,6 +1951,7 @@ dependencies = [
 name = "filmcraft-export"
 version = "0.7.2"
 dependencies = [
+ "craft-stage",
  "filmcraft-aac",
  "filmcraft-apv",
  "filmcraft-audio-dsp",
@@ -2239,6 +2240,7 @@ dependencies = [
 name = "filmcraft-render"
 version = "0.7.2"
 dependencies = [
+ "craft-stage",
  "filmcraft-audio-dsp",
  "filmcraft-captions",
  "filmcraft-color",

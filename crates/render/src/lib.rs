@@ -553,8 +553,13 @@ fn plain_layer(frame: &VideoFrame, n: usize, opacity: f32, blend: Blend) -> Laye
 /// The source frame of a media clip at timeline `t` (at `want` of its size), and the decimation to
 /// convert it with.
 fn media_frame(item: &TrackItem, t: Tick, sources: &dyn SourceProvider, want: f32, src_size: (u32, u32)) -> Option<(SharedSource, Arc<VideoFrame>, usize)> {
+    // ours (self-logging): which step of a frame a stalled export is in, and on which pool thread
+    let facts = [("item", item.item.0 as f64), ("worker", rayon::current_thread_index().map_or(-1.0, |i| i as f64))];
+    craft_stage::stage_with("source: ask the provider for the file", &facts);
     let src = sources.source(item.item)?;
+    craft_stage::stage_with("source: decode a picture", &facts);
     let frame = src.video_frame(FrameRequest { time: video_source_time(item, t, src.info().frame_rate()), scale: want }).ok()?;
+    craft_stage::stage_with("layers: convert and composite", &facts);
     let n = decimation(frame.width as f32, src_size.0 as f32 * want);
     Some((src, frame, n))
 }
