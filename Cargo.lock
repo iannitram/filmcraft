@@ -1691,6 +1691,7 @@ dependencies = [
  "arboard",
  "chrono",
  "cpal",
+ "craft-log",
  "eframe",
  "egui",
  "filmcraft-engine",
@@ -1814,6 +1815,7 @@ version = "0.7.0"
 name = "filmcraft-cli"
 version = "0.7.0"
 dependencies = [
+ "craft-log",
  "filmcraft-automation",
  "filmcraft-codecs",
  "filmcraft-engine",
@@ -2185,6 +2187,7 @@ dependencies = [
 name = "filmcraft-platform"
 version = "0.7.0"
 dependencies = [
+ "craft-log",
  "filmcraft-bitstream",
  "filmcraft-codecs",
  "filmcraft-color",
