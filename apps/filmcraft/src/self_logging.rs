@@ -126,7 +126,9 @@ pub fn window_ready(cc: &eframe::CreationContext<'_>, gpu_compositor: bool) {
     }
     // after the compositor's first configure: asked versus got, once. The size comes from the
     // window itself: egui's `inner_rect` stays empty on Wayland, where a window has no position.
-    let window = cc.winit_window().cloned();
+    // Held weakly: the closure lives as long as the egui context, and a strong reference to the
+    // window kept it (and the program) alive after it was closed.
+    let window = cc.winit_window().map(std::sync::Arc::downgrade);
     let done = AtomicBool::new(false);
     cc.egui_ctx.on_end_pass(
         "self-logging-window-size",
@@ -137,7 +139,9 @@ pub fn window_ready(cc: &eframe::CreationContext<'_>, gpu_compositor: bool) {
             }
             let (rect, ppp) = ctx.input(|i| (i.viewport().inner_rect, i.viewport().native_pixels_per_point));
             let got = match &window {
-                Some(w) => {
+                Some(weak) => {
+                    // the window is gone: nothing to say
+                    let Some(w) = weak.upgrade() else { return };
                     let (inner, scale) = (w.inner_size(), w.scale_factor());
                     let l = inner.to_logical::<f64>(scale);
                     // points, as asked (egui's unit is f32)
