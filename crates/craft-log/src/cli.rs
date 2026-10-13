@@ -7,7 +7,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock, PoisonError};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use log::LevelFilter;
 
@@ -43,12 +43,69 @@ pub fn open(dir: &Path, app: &str) -> std::io::Result<(PathBuf, File, u64)> {
     std::fs::create_dir_all(dir)?;
     let path = dir.join(file_name(app));
     if std::fs::metadata(&path).is_ok_and(|m| too_full(m.len())) {
-        // Several runs may race here; whichever rename wins, a fresh file follows.
-        let _ = std::fs::rename(&path, dir.join(format!("{app}-cli.1.log")));
+        roll_over(dir, app, &path);
     }
     let file = open_append(&path)?;
     let len = file.metadata().map(|m| m.len()).unwrap_or(0);
     Ok((path, file, len))
+}
+
+/// A roll-over lock older than this was left by a run that died holding it.
+pub const LOCK_STALE: Duration = Duration::from_secs(10);
+/// How long a run waits for another run's roll-over before appending without one.
+const LOCK_WAIT: Duration = Duration::from_secs(2);
+
+/// Move a log without room for a run to `<app>-cli.1.log`, safely when many runs start at once
+/// (one check starts hundreds): under `<app>-cli.lock`, and only if the log is still too full once
+/// the lock is held, so a run that saw the full log before another run moved it does not then
+/// move the fresh one over it. Without the lock (another run holds it past [`LOCK_WAIT`]) nothing
+/// moves: the run appends to the full log, where its error lines still land.
+fn roll_over(dir: &Path, app: &str, path: &Path) {
+    let Some(_lock) = Lock::take(&dir.join(format!("{app}-cli.lock"))) else { return };
+    if std::fs::metadata(path).is_ok_and(|m| m.is_file() && too_full(m.len())) {
+        let _ = std::fs::rename(path, dir.join(format!("{app}-cli.1.log")));
+    }
+}
+
+/// A lock file made with `create_new` (atomic everywhere, network folders included), removed when
+/// dropped. One older than [`LOCK_STALE`] is taken over.
+struct Lock(PathBuf);
+
+impl Lock {
+    fn take(path: &Path) -> Option<Lock> {
+        let start = Instant::now();
+        loop {
+            match OpenOptions::new().write(true).create_new(true).open(path) {
+                Ok(_) => return Some(Lock(path.to_path_buf())),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if stale(path) {
+                        // moved aside under a name of our own first: of two runs that both found it
+                        // stale, only one moves it, and neither removes a lock just taken anew
+                        let aside = path.with_extension(format!("stale-{}", std::process::id()));
+                        if std::fs::rename(path, &aside).is_ok() {
+                            let _ = std::fs::remove_file(&aside);
+                        }
+                        continue;
+                    }
+                    if start.elapsed() > LOCK_WAIT {
+                        return None;
+                    }
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Err(_) => return None,
+            }
+        }
+    }
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn stale(path: &Path) -> bool {
+    std::fs::metadata(path).and_then(|m| m.modified()).is_ok_and(|t| SystemTime::now().duration_since(t).is_ok_and(|age| age > LOCK_STALE))
 }
 
 /// Open `path` for appending without ever waiting on it. Opening a FIFO for writing waits for a
@@ -341,6 +398,26 @@ mod tests {
         assert!(text.contains("the reason the command failed"), "the log: line must point at a file holding the error: {text}");
         assert!(!text.contains("a warning that does not fit") && !text.contains("neither does this"), "{text}");
         assert!(text.contains(&format!("log file reached {MAX_FILE_BYTES} bytes")), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_stale_roll_over_lock_is_taken_over_and_a_live_one_waited_for() {
+        let dir = temp_dir("lock");
+        std::fs::create_dir_all(&dir).unwrap();
+        let lock = dir.join("app-cli.lock");
+        // a run died holding it a minute ago
+        let f = std::fs::File::create(&lock).unwrap();
+        f.set_modified(SystemTime::now() - Duration::from_secs(60)).unwrap();
+        drop(f);
+        let held = Lock::take(&lock).expect("a stale lock is taken over");
+        assert!(lock.is_file());
+        // held now: another taker waits LOCK_WAIT, then gives up
+        let t0 = Instant::now();
+        assert!(Lock::take(&lock).is_none());
+        assert!(t0.elapsed() >= LOCK_WAIT);
+        drop(held);
+        assert!(!lock.exists(), "released");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
