@@ -134,3 +134,15 @@ fn webm_with_1ms_timestamps_shows_every_frame_once() {
 fn mp4_with_a_1ms_timescale_shows_every_frame_once() {
     check("mov", mp4_1ms);
 }
+
+/// A file whose time stamps were rounded says its real frame rate, not the rate of one of the two
+/// durations the rounding left behind (23.976 fps read as 23.81, 29.97 as 30.3).
+#[test]
+fn mp4_with_a_1ms_timescale_reports_its_real_frame_rate() {
+    for rate in RATES {
+        for stamp in [Stamp::Nearest, Stamp::Floor] {
+            let src = crate::open_bytes("synthetic.mov", mp4_1ms(rate, stamp)).unwrap();
+            assert_eq!(src.info().frame_rate(), rate, "{rate}, {stamp:?} ms stamps");
+        }
+    }
+}
