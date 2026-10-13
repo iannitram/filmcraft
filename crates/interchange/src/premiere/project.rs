@@ -381,7 +381,8 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                             if generated && child_text(component, "MatchName") == Some(text::MATCH_NAME) {
                                 let root = self.graph.root;
                                 let shared = self.shared_values.get_or_insert_with(|| text::shared_values(root, "StartKeyframeValue"));
-                                if let Some(layer) = text::layer(&self.graph, component, Tick::ZERO, sequence_size, shared, self.report)? {
+                                if let Some(mut layer) = text::layer(&self.graph, component, Tick::ZERO, sequence_size, shared, self.report)? {
+                                    text::fit_pixels(&mut layer, sequence.settings.par);
                                     layers.push(layer);
                                     continue;
                                 }
@@ -414,7 +415,8 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                             if child_text(component, "MatchName") == Some(text::MATCH_NAME) {
                                 let root = self.graph.root;
                                 let shared = self.shared_values.get_or_insert_with(|| text::shared_values(root, "StartKeyframeValue"));
-                                if let Some(layer) = text::layer(&self.graph, component, Tick::ZERO, sequence_size, shared, self.report)? {
+                                if let Some(mut layer) = text::layer(&self.graph, component, Tick::ZERO, sequence_size, shared, self.report)? {
+                                    text::fit_pixels(&mut layer, sequence.settings.par);
                                     layers.push(layer);
                                 }
                             }
