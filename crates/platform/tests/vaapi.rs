@@ -198,6 +198,7 @@ fn parity_streaming(name: &str, s: &Stream) {
 
 #[test]
 fn bit_exact_with_the_software_decoder() {
+    let _log = craft_log::testing::capture(); // ours: a failure prints this test's log lines
     let ff = filmcraft_testkit::require_ffmpeg!();
     let streams = small_streams(&ff);
     assert!(streams.len() > H264.len(), "fixtures");
