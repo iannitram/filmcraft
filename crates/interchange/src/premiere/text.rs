@@ -79,7 +79,7 @@ pub(super) fn layer(
             *p = Param::new(value);
         }
     };
-    set("text", ParamValue::Text(text.to_string()));
+    set("text", ParamValue::Text(line_feeds(text)));
     // The layer takes the style of its first character. A later stretch that differs in what a
     // style run holds becomes one (`carried`); a difference a run cannot hold is reported (`mixed`).
     let mut carried = false;
@@ -262,6 +262,23 @@ fn first_run<'a>(sheet: &'a Value, key: &str, mixed: &mut bool) -> Option<&'a Va
     let first = runs.first()?.get(1)?;
     *mixed |= runs.iter().skip(1).any(|run| run.get(1) != Some(first));
     Some(first)
+}
+
+/// A title's words as a text layer holds them. The application ends a line with a carriage
+/// return; a text layer breaks its lines at line feeds and draws a carriage return as a missing
+/// character. Each carriage return becomes a line feed, so one character stays one character
+/// and the places of the style runs hold; one that already has a line feed after it is dropped.
+fn line_feeds(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    while let Some(c) = characters.next() {
+        match c {
+            '\r' if characters.peek() == Some(&'\n') => {}
+            '\r' => out.push('\n'),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// The stretches of a text of `characters` characters that differ from its first character in
@@ -578,6 +595,13 @@ mod tests {
         for (name, (family, face)) in pairs {
             assert_eq!(font(name), (family.to_string(), face.to_string()), "{name}");
         }
+    }
+
+    #[test]
+    fn carriage_returns_become_line_feeds() {
+        assert_eq!(line_feeds("one\rtwo\rthree"), "one\ntwo\nthree");
+        assert_eq!(line_feeds("one\r\ntwo"), "one\ntwo");
+        assert_eq!(line_feeds("no break"), "no break");
     }
 
     #[test]
