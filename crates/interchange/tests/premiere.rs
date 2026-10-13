@@ -417,14 +417,22 @@ fn premiere_clip_that_starts_before_its_media_is_trimmed_not_refused() {
     let video = &sequence.video_tracks[0].items[0];
     assert_eq!((video.start, video.duration, video.source_in), (Tick::ZERO, Tick(2 * TPS), Tick(5 * TPS)));
     assert_eq!(video.link, audio.link);
-    // a range that lies wholly before the media, or runs backwards, is still refused
-    for (source_in, source_out) in [(-2 * TPS, -TPS), (-TPS, 0), (7 * TPS, 5 * TPS)] {
-        let bad = project_xml().replace(
+    let with_range = |source_in: i64, source_out: i64| {
+        project_xml().replace(
             &format!("<AudioClip ObjectID=\"70\"><Clip><Source ObjectRef=\"23\"/><InPoint>{}</InPoint><OutPoint>{}</OutPoint>", 5 * TPS, 7 * TPS),
             &format!("<AudioClip ObjectID=\"70\"><Clip><Source ObjectRef=\"23\"/><InPoint>{source_in}</InPoint><OutPoint>{source_out}</OutPoint>"),
-        );
-        assert!(premiere::import_project(bad.as_bytes(), &ImportOptions::default()).is_err(), "{source_in}..{source_out}");
+        )
+    };
+    // a clip that ends before its media starts plays nothing: it is left out, and said so
+    for (source_in, source_out) in [(-2 * TPS, -TPS), (-TPS, 0)] {
+        let (imported, report) = premiere::import_project(with_range(source_in, source_out).as_bytes(), &ImportOptions::default()).unwrap();
+        assert!(report.to_string().contains("lies wholly before its media"), "{source_in}..{source_out}: {report}");
+        let sequence = imported.project.sequence(imported.sequences[0]).unwrap();
+        assert!(sequence.audio_tracks[0].items.is_empty());
+        assert_eq!(sequence.video_tracks[0].items.len(), 1);
     }
+    // a range that runs backwards is still refused
+    assert!(premiere::import_project(with_range(7 * TPS, 5 * TPS).as_bytes(), &ImportOptions::default()).is_err());
 }
 
 #[test]
