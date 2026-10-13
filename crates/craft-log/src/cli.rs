@@ -148,6 +148,8 @@ pub fn install(app: &App, log_dir: Option<&Path>) -> Option<&'static CliLogger> 
     log::set_max_level(max);
     logger.write(log::Level::Info, app.name, &app.build_line());
     logger.write(log::Level::Info, app.name, &format!("command line: {}; log filter \"{spec}\" from {}", args_masked(), source.name()));
+    crate::set_log_path(logger.path().map(Path::to_path_buf));
+    crate::stall::start(app.name);
     Some(logger)
 }
 

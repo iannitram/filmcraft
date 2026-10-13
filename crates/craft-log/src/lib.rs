@@ -7,7 +7,8 @@
 //!
 //! - the window app: [`install_wrapped`] around the app's own logger, which keeps its file,
 //!   folder, rotation and format exactly; this adds the build line, `CRAFT_LOG`, the repeat
-//!   collapse and the ring of recent lines;
+//!   collapse, the ring of recent lines and the stall watch; then [`set_log_path`] once the app
+//!   has opened its file;
 //! - a command-line program: [`cli::install`], one shared `<log dir>/<app>-cli.log` appended to by
 //!   every run, and [`cli::report_failure`] before exiting with an error, which prints
 //!   `log: <path>` as the last line on standard error;
@@ -25,10 +26,12 @@ pub mod cli;
 pub mod collapse;
 pub mod filter;
 pub mod line;
+pub mod stall;
 pub mod testing;
 pub mod wrap;
 
-use std::sync::OnceLock;
+use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 pub use collapse::recent;
 
@@ -72,6 +75,19 @@ impl App {
     }
 }
 
+static LOG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Record where this process's log file is, for the lines that point at it (the stall warning,
+/// a failing command's last line, the diagnostic report).
+pub fn set_log_path(path: Option<PathBuf>) {
+    *LOG_PATH.lock().unwrap_or_else(PoisonError::into_inner) = path;
+}
+
+/// This process's log file, when one was recorded.
+pub fn log_path() -> Option<PathBuf> {
+    LOG_PATH.lock().unwrap_or_else(PoisonError::into_inner).clone()
+}
+
 static WRAPPED: OnceLock<wrap::Wrapped> = OnceLock::new();
 
 /// Install `inner` (the app's own logger, built but not installed) wrapped by
@@ -86,6 +102,7 @@ pub fn install_wrapped(app: &App, inner: &'static dyn log::Log, max: log::LevelF
     let (spec, source) = app.filter_spec();
     log::info!(target: app.name, "{}", app.build_line());
     log::info!(target: app.name, "log filter \"{spec}\" from {}", source.name());
+    stall::start(app.name);
     true
 }
 
