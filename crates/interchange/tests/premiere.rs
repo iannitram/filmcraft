@@ -1425,3 +1425,34 @@ fn premiere_legacy_title_for_widescreen_pixels_keeps_its_shape() {
     assert!((place.x - want).abs() < 0.01 && (place.y - (360.0 + 300.0)).abs() < 0.01, "{place:?} against {want}");
     assert!(matches!(layer.param("uniform_scale").unwrap().value, ParamValue::Bool(true)), "letters as they are");
 }
+
+/// A graphic kept in the project has its text layers on its master clip, not on the clips made
+/// from it: a clip whose own chain has no text takes the master's.
+#[test]
+fn premiere_text_on_the_master_clip_of_a_graphic_becomes_a_text_layer() {
+    use filmcraft_project::ParamValue;
+    let on_the_clip = project_with_text_layer(&source_text_json(TITLE_JSON));
+    let xml = on_the_clip
+        .replace("<Component Index=\"0\" ObjectRef=\"64\"/><Component Index=\"1\" ObjectRef=\"80\"/></Components>", "<Component Index=\"0\" ObjectRef=\"64\"/></Components>")
+        .replace("<SubClip ObjectID=\"61\"><Name>Example cut</Name>", "<SubClip ObjectID=\"61\"><MasterClip ObjectURef=\"movie-master\"/><Name>Example cut</Name>")
+        .replace("<MasterClip ObjectUID=\"movie-master\"><Name>Example movie</Name>", "<MasterClip ObjectUID=\"movie-master\"><VideoComponentChain ObjectRef=\"90\"/><Name>Example movie</Name>")
+        .replace(
+            "</PremiereData>",
+            "<VideoComponentChain ObjectID=\"90\"><ComponentChain><Components><Component Index=\"0\" ObjectRef=\"80\"/></Components></ComponentChain></VideoComponentChain></PremiereData>",
+        );
+    assert_eq!(xml.matches("ObjectRef=\"80\"").count(), 1, "the text component hangs on the master clip only");
+    assert!(xml.contains("<MasterClip ObjectURef=\"movie-master\"/>") && xml.contains("<VideoComponentChain ObjectRef=\"90\"/>"));
+    let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+    let said = report.to_string();
+    assert!(said.contains("imported as FilmCraft text layers"), "{said}");
+    let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+    assert!(video.enabled);
+    let layers: Vec<_> = video.graphic_layers().collect();
+    assert_eq!(layers.len(), 1);
+    assert!(matches!(&layers[0].param("text").unwrap().value, ParamValue::Text(s) if s == "A synthetic title"));
+    assert_eq!(layers[0].vec2_at("position", Tick::ZERO), Vec2::new(480.0, 540.0));
+    // a master clip that is not there leaves the clip a switched-off placeholder, and the project imports
+    let dangling = xml.replace("<VideoComponentChain ObjectRef=\"90\"/>", "<VideoComponentChain ObjectRef=\"999\"/>");
+    let (imported, _) = premiere::import_project(dangling.as_bytes(), &ImportOptions::default()).unwrap();
+    assert!(!imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0].enabled);
+}
