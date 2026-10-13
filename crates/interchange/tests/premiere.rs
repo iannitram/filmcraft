@@ -521,3 +521,36 @@ fn premiere_generated_graphics_are_kept_switched_off_and_look_for_no_file() {
     let (plain, _) = premiere::import_project(project_xml().as_bytes(), &opts).unwrap();
     assert!(plain.project.sequence(plain.sequences[0]).unwrap().video_tracks[0].items[0].enabled);
 }
+
+#[test]
+fn premiere_points_written_as_two_fields_by_older_versions_are_read() {
+    // project version 36 and thereabouts: `time,x,y,…` where newer files have `time,x:y,…`
+    let xml = project_xml().replace(
+        "<ParameterID>1</ParameterID><StartKeyframe>-91445760000000000,0.25:0.75,0,0,0,0,0,0</StartKeyframe>",
+        "<ParameterID>1</ParameterID><StartKeyframe>-91445760000000000,0.25,0.75,0,0,0,0,0,0,5,4,0,0,0,0</StartKeyframe>",
+    );
+    assert_ne!(xml, project_xml());
+    let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+    assert!(!report.has_warnings(), "{report}");
+    let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+    let motion = video.effect("motion").unwrap();
+    assert_eq!(motion.vec2_at("position", Tick(5 * TPS)), Vec2::new(480.0, 810.0));
+    assert_eq!(motion.vec2_at("anchor", Tick(5 * TPS)), Vec2::new(960.0, 540.0), "the newer spelling beside it still reads");
+
+    // and animated: two keyframes in the older spelling, linear
+    let animated = project_xml().replace(
+        "<PointComponentParam ObjectID=\"65\"><ParameterID>1</ParameterID><StartKeyframe>-91445760000000000,0.25:0.75,0,0,0,0,0,0</StartKeyframe>",
+        &format!(
+            "<PointComponentParam ObjectID=\"65\"><ParameterID>1</ParameterID><IsTimeVarying>true</IsTimeVarying><StartKeyframe>-91445760000000000,0.25,0.75,0,0,0,0,0,0,5,4,0,0,0,0</StartKeyframe><Keyframes>{},0.25,0.75,0,0,0,0,0,0,5,4,0,0,0,0;{},0.75,0.25,0,0,0,0,0,0,5,4,0,0,0,0;</Keyframes>",
+            5 * TPS,
+            7 * TPS
+        ),
+    );
+    assert_ne!(animated, project_xml());
+    let (imported, _) = premiere::import_project(animated.as_bytes(), &ImportOptions::default()).unwrap();
+    let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+    let position = video.effect("motion").unwrap().param("position").unwrap();
+    assert_eq!(position.keyframes.len(), 2);
+    assert_eq!(position.vec2_at(Tick(5 * TPS)), Vec2::new(480.0, 810.0));
+    assert_eq!(position.vec2_at(Tick(7 * TPS)), Vec2::new(1440.0, 270.0));
+}
