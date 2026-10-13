@@ -924,3 +924,172 @@ fn premiere_text_written_once_is_found_by_its_hash() {
     let (imported, _) = premiere::import_project(lost.as_bytes(), &ImportOptions::default()).unwrap();
     assert!(!imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0].enabled);
 }
+
+/// One field of a hand-written table-and-offset buffer (the binary form of Source Text).
+enum Field {
+    Absent,
+    Byte(u8),
+    Number(u32),
+    Float(f32),
+    Words(&'static str),
+    Table(Vec<Field>),
+    List(Vec<Field>),
+}
+
+/// Writes a table (its field-offset list, then its fields, then what they point to) and returns
+/// where the table starts.
+fn put_table(out: &mut Vec<u8>, fields: &[Field]) -> usize {
+    let list = out.len();
+    let mut next = 4u16;
+    let offsets: Vec<u16> = fields
+        .iter()
+        .map(|f| {
+            if matches!(f, Field::Absent) {
+                0
+            } else {
+                next += 4;
+                next - 4
+            }
+        })
+        .collect();
+    out.extend(((4 + 2 * fields.len()) as u16).to_le_bytes());
+    out.extend(next.to_le_bytes());
+    for offset in &offsets {
+        out.extend(offset.to_le_bytes());
+    }
+    let table = out.len();
+    out.extend(((table - list) as i32).to_le_bytes());
+    let mut pointers = Vec::new();
+    for field in fields {
+        match field {
+            Field::Absent => {}
+            Field::Byte(v) => out.extend([*v, 0, 0, 0]),
+            Field::Number(v) => out.extend(v.to_le_bytes()),
+            Field::Float(v) => out.extend(v.to_le_bytes()),
+            other => {
+                pointers.push((out.len(), other));
+                out.extend([0; 4]);
+            }
+        }
+    }
+    for (at, field) in pointers {
+        let target = put_value(out, field);
+        out[at..at + 4].copy_from_slice(&((target - at) as u32).to_le_bytes());
+    }
+    table
+}
+
+fn put_value(out: &mut Vec<u8>, field: &Field) -> usize {
+    match field {
+        Field::Words(text) => {
+            let at = out.len();
+            out.extend((text.len() as u32).to_le_bytes());
+            out.extend(text.as_bytes());
+            out.push(0);
+            at
+        }
+        Field::Table(fields) => put_table(out, fields),
+        Field::List(items) => {
+            let at = out.len();
+            out.extend((items.len() as u32).to_le_bytes());
+            let slots = out.len();
+            out.resize(slots + 4 * items.len(), 0);
+            for (i, item) in items.iter().enumerate() {
+                let slot = slots + 4 * i;
+                let target = put_value(out, item);
+                out[slot..slot + 4].copy_from_slice(&((target - slot) as u32).to_le_bytes());
+            }
+            at
+        }
+        _ => panic!("not something a field points to"),
+    }
+}
+
+/// A Source Text value as project versions 40 to 43 write it: the byte length, four zero bytes,
+/// the marker, then the tables. Two runs ("Two " and "fonts"), two fonts, the second run smaller.
+fn source_text_binary() -> Vec<u8> {
+    use Field::*;
+    let black = || Table(vec![Byte(0), Byte(0), Byte(0)]);
+    let style = |size: f32| Table(vec![Number(1), Float(size), Table(vec![Byte(236), Byte(246)]), Absent, black(), Byte(1), Float(4.0)]);
+    let mut text = vec![
+        List(vec![Table(vec![Words("Two "), style(70.0)]), Table(vec![Words("fonts"), style(40.0)])]),
+        List(vec![Words("ExampleSans-Regular"), Words("ExampleSerif-Bold")]),
+    ];
+    text.extend([Absent, Absent, Number(1)]);
+    text.extend([Absent, Absent, Absent, Absent, Absent]);
+    text.extend([black(), Byte(1), Float(50.0), Absent, Float(10.0), Absent, Float(30.0)]);
+    let mut tables = vec![0u8; 4];
+    let root = put_table(&mut tables, &[Table(text)]);
+    tables[..4].copy_from_slice(&(root as u32).to_le_bytes());
+    let mut bytes = ((tables.len() + 4) as u32).to_le_bytes().to_vec();
+    bytes.extend([0u8; 4]);
+    bytes.extend([0x44, 0x33, 0x22, 0x11]);
+    bytes.extend(tables);
+    bytes
+}
+
+/// The binary form newer project versions write holds the same things in numbered fields.
+#[test]
+fn premiere_text_in_the_binary_form_becomes_a_text_layer() {
+    use filmcraft_project::ParamValue;
+    let xml = project_with_text_layer(&source_text_binary());
+    let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+    let said = report.to_string();
+    assert!(!said.contains("AE.ADBE Text"), "read, not skipped: {said}");
+    assert!(said.contains("more than one style"), "the second run is smaller: {said}");
+    let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+    assert!(video.enabled);
+    let layers: Vec<_> = video.graphic_layers().collect();
+    assert_eq!(layers.len(), 1);
+    let layer = layers[0];
+    let text = |id: &str| match &layer.param(id).unwrap().value {
+        ParamValue::Text(s) => s.clone(),
+        other => panic!("{id}: {other:?}"),
+    };
+    assert_eq!((text("text").as_str(), text("font").as_str(), text("font_style").as_str()), ("Two fonts", "Example Serif", "Bold"));
+    assert_eq!(layer.f64_at("size", Tick::ZERO), 70.0);
+    assert!(matches!(layer.param("align").unwrap().value, ParamValue::Choice(1)));
+    // a colour channel that is not written is 255
+    assert!(
+        matches!(layer.param("fill_color").unwrap().value, ParamValue::Color(c) if c == [236.0 / 255.0, 246.0 / 255.0, 1.0, 1.0]),
+        "{:?}",
+        layer.param("fill_color")
+    );
+    assert!(matches!(layer.param("stroke").unwrap().value, ParamValue::Bool(true)));
+    assert_eq!(layer.f64_at("stroke_width", Tick::ZERO), 4.0);
+    assert!(matches!(layer.param("stroke_color").unwrap().value, ParamValue::Color(c) if c == [0.0, 0.0, 0.0, 1.0]));
+    assert!(matches!(layer.param("shadow").unwrap().value, ParamValue::Bool(true)));
+    assert!(matches!(layer.param("shadow_color").unwrap().value, ParamValue::Color(c) if c == [0.0, 0.0, 0.0, 1.0]));
+    assert_eq!(
+        (layer.f64_at("shadow_opacity", Tick::ZERO), layer.f64_at("shadow_distance", Tick::ZERO), layer.f64_at("shadow_angle", Tick::ZERO)),
+        (50.0, 10.0, 30.0)
+    );
+    assert_eq!(layer.vec2_at("position", Tick::ZERO), Vec2::new(480.0, 540.0));
+}
+
+/// Every number in the binary form comes from the file: cut short anywhere, or with any byte
+/// changed, it is read or refused, never a panic and never a failed import.
+#[test]
+fn premiere_text_in_a_damaged_binary_form_never_panics() {
+    let good = source_text_binary();
+    let fix_length = |mut bytes: Vec<u8>| {
+        if bytes.len() >= 8 {
+            let body = (bytes.len() - 8) as u32;
+            bytes[..4].copy_from_slice(&body.to_le_bytes());
+        }
+        bytes
+    };
+    let mut cases: Vec<Vec<u8>> = (12..good.len()).map(|cut| fix_length(good[..cut].to_vec())).collect();
+    for at in 12..good.len() {
+        for value in [0x00, 0x7f, 0x80, 0xff] {
+            let mut changed = good.clone();
+            changed[at] = value;
+            cases.push(changed);
+        }
+    }
+    for case in cases {
+        let xml = project_with_text_layer(&case);
+        let result = std::panic::catch_unwind(|| premiere::import_project(xml.as_bytes(), &ImportOptions::default()).map(|_| ()));
+        assert!(matches!(result, Ok(Ok(()))), "{case:?}");
+    }
+}

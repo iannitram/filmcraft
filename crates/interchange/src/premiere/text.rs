@@ -1,13 +1,24 @@
 //! Text layers of graphics made inside the application: the `AE.ADBE Text` component.
 //!
-//! Observed in user-authored project files of versions 34 to 38: the component's first
-//! parameter, Source Text, holds base64 of an 8-byte header (the byte length of what follows as
-//! a little-endian number, then zeros) and then a JSON document in UTF-16LE. Its `mTextParam`
-//! object names the text, the font (by PostScript name), the size, alignment, fill, stroke and
-//! shadow; the style values are lists of `[first character, value]` runs. The parameters after
-//! Source Text are the layer's own position (normalised to the sequence frame), scale, rotation
-//! and opacity. Newer versions write Source Text in a binary form that is not read here: such a
-//! layer is reported and left out, as before.
+//! Observed in user-authored project files: the component's first parameter, Source Text, holds
+//! base64 of an 8-byte header (the byte length of what follows as a little-endian number, then
+//! zeros) and then the text in one of two forms.
+//!
+//! - Project versions 34 to 38: a JSON document in UTF-16LE. Its `mTextParam` object names the
+//!   text, the font (by PostScript name), the size, alignment, fill, stroke and shadow; the style
+//!   values are lists of `[first character, value]` runs.
+//! - Project versions 40 to 43: four marker bytes (`44 33 22 11`) and a table-and-offset binary
+//!   (tables that find their fields through a field-offset list in front of them, strings and
+//!   lists with a length in front; a field left at its default is not written). The same
+//!   things are in it, in numbered fields ([`binary`]): a list of runs, each its words and a
+//!   style, and a list of the font names the styles pick from. It is turned into the JSON shape
+//!   of the older form, so both are mapped by the same code. Which field is which was worked
+//!   out from the values in several hundred titles; the fields whose meaning stayed unclear are
+//!   not read.
+//!
+//! The parameters after Source Text are the layer's own position (normalised to the sequence
+//! frame), scale, rotation and opacity. A Source Text in neither form is reported and its layer
+//! left out, as before.
 //!
 //! A file writes each distinct binary value once: a later parameter holding the same value has
 //! an empty element that names it by its `BinaryHash` attribute ([`shared_values`]).
@@ -217,8 +228,8 @@ fn first_run<'a>(sheet: &'a Value, key: &str, mixed: &mut bool) -> Option<&'a Va
     Some(first)
 }
 
-/// The JSON document inside a Source Text value, or `None` for anything else (the binary form
-/// newer versions write, damaged data, text that is too long to be a title).
+/// The text document inside a Source Text value, in the shape of the JSON form, or `None` for
+/// anything that is neither form (damaged data, text that is too long to be a title).
 fn source_text(base64: &str) -> Option<Value> {
     if base64.len() > MAX_SOURCE_TEXT_BASE64 {
         return None;
@@ -226,12 +237,151 @@ fn source_text(base64: &str) -> Option<Value> {
     let bytes = decode_base64(base64)?;
     let body = bytes.get(8..)?;
     let declared = u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?) as usize;
-    if declared != body.len() || body.len() % 2 != 0 {
+    if declared != body.len() {
+        return None;
+    }
+    if let Some(tables) = body.strip_prefix(&binary::MARKER) {
+        return binary::document(tables);
+    }
+    if body.len() % 2 != 0 {
         return None;
     }
     let units: Vec<u16> = body.as_chunks::<2>().0.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
     let text = String::from_utf16(&units).ok()?;
     serde_json::from_str(&text).ok().filter(Value::is_object)
+}
+
+/// The binary form of Source Text (project versions 40 to 43).
+mod binary {
+    use serde_json::{Value, json};
+
+    pub(super) const MARKER: [u8; 4] = [0x44, 0x33, 0x22, 0x11];
+
+    /// Runs, fonts and the bytes of one string are capped: a title has a handful.
+    const MAX_ITEMS: usize = 4096;
+    const MAX_STRING: usize = 1 << 20;
+
+    /// Bounds-checked reads of the table-and-offset data: every position comes from the file.
+    struct Tables<'a>(&'a [u8]);
+
+    impl<'a> Tables<'a> {
+        fn bytes<const N: usize>(&self, at: usize) -> Option<[u8; N]> {
+            self.0.get(at..at.checked_add(N)?)?.try_into().ok()
+        }
+        fn u8(&self, at: usize) -> Option<u8> {
+            self.0.get(at).copied()
+        }
+        fn u16(&self, at: usize) -> Option<usize> {
+            self.bytes(at).map(|b| usize::from(u16::from_le_bytes(b)))
+        }
+        fn u32(&self, at: usize) -> Option<u32> {
+            self.bytes(at).map(u32::from_le_bytes)
+        }
+        fn f32(&self, at: usize) -> Option<f64> {
+            self.bytes(at).map(|b| f64::from(f32::from_le_bytes(b))).filter(|v| v.is_finite())
+        }
+        /// What the offset stored at `at` points to (a table, a string or a list).
+        fn target(&self, at: usize) -> Option<usize> {
+            at.checked_add(usize::try_from(self.u32(at)?).ok()?).filter(|to| *to < self.0.len())
+        }
+        /// Where field `index` of the table at `table` is stored, when the file wrote it.
+        fn field(&self, table: usize, index: usize) -> Option<usize> {
+            let back = i64::from(i32::from_le_bytes(self.bytes(table)?));
+            let list = usize::try_from(i64::try_from(table).ok()?.checked_sub(back)?).ok()?;
+            let slot = index.checked_mul(2)?.checked_add(4)?;
+            if slot.checked_add(2)? > self.u16(list)? {
+                return None;
+            }
+            let offset = self.u16(list.checked_add(slot)?)?;
+            (offset != 0).then(|| table.checked_add(offset)).flatten()
+        }
+        fn table(&self, table: usize, index: usize) -> Option<usize> {
+            self.target(self.field(table, index)?)
+        }
+        fn string(&self, at: usize) -> Option<&'a str> {
+            let start = self.target(at)?;
+            let length = usize::try_from(self.u32(start)?).ok().filter(|n| *n <= MAX_STRING)?;
+            let first = start.checked_add(4)?;
+            std::str::from_utf8(self.0.get(first..first.checked_add(length)?)?).ok()
+        }
+        /// The positions of the entries of the list that field `index` of `table` points to.
+        fn list(&self, table: usize, index: usize) -> Option<impl Iterator<Item = usize>> {
+            let start = self.table(table, index)?;
+            let count = usize::try_from(self.u32(start)?).ok().filter(|n| *n <= MAX_ITEMS)?;
+            let first = start.checked_add(4)?;
+            Some((0..count).filter_map(move |i| first.checked_add(i.checked_mul(4)?)))
+        }
+        /// A colour: a table of red, green and blue bytes, each 255 when it is not written.
+        fn colour(&self, table: usize, index: usize) -> Option<u32> {
+            let colour = self.table(table, index)?;
+            let channel = |i: usize| u32::from(self.field(colour, i).and_then(|at| self.u8(at)).unwrap_or(255));
+            Some(channel(0) << 16 | channel(1) << 8 | channel(2))
+        }
+        fn flag(&self, table: usize, index: usize) -> Option<bool> {
+            self.field(table, index).and_then(|at| self.u8(at)).map(|v| v != 0)
+        }
+        fn number(&self, table: usize, index: usize) -> Option<f64> {
+            self.field(table, index).and_then(|at| self.f32(at))
+        }
+    }
+
+    /// The text of `data` (what follows the marker) as the JSON form would hold it.
+    ///
+    /// Fields read, by number. The text table (field 0 of the root): 0 the runs, 1 the font
+    /// names, 4 the alignment, 10 the shadow colour, 11 shadow shown, 12 its opacity, 14 its
+    /// distance, 16 its angle. A run: 0 its words, 1 its style. A style: 0 the number of its
+    /// font in the list, 1 the size, 2 the fill colour, 3 fill shown, 4 the stroke colour,
+    /// 5 stroke shown, 6 the stroke width.
+    pub(super) fn document(data: &[u8]) -> Option<Value> {
+        let t = Tables(data);
+        let root = usize::try_from(t.u32(0)?).ok()?;
+        let text = t.table(root, 0)?;
+        let fonts: Vec<&str> = t.list(text, 1).map(|entries| entries.filter_map(|at| t.string(at)).collect()).unwrap_or_default();
+        let mut words = String::new();
+        let mut runs: [Vec<Value>; 7] = Default::default();
+        const KEYS: [&str; 7] = ["mFontName", "mFontSize", "mFillColor", "mFillVisible", "mStrokeColor", "mStrokeVisible", "mStrokeWidth"];
+        for run in t.list(text, 0)?.filter_map(|at| t.target(at)) {
+            let first = words.chars().count();
+            words.push_str(t.field(run, 0).and_then(|at| t.string(at)).unwrap_or(""));
+            let Some(style) = t.table(run, 1) else { continue };
+            let font = t.field(style, 0).and_then(|at| t.u32(at)).unwrap_or(0);
+            let values = [
+                fonts.get(usize::try_from(font).ok()?).map(|name| json!(name)),
+                t.number(style, 1).map(|v| json!(v)),
+                t.colour(style, 2).map(|v| json!(v)),
+                t.flag(style, 3).map(|v| json!(v)),
+                t.colour(style, 4).map(|v| json!(v)),
+                t.flag(style, 5).map(|v| json!(v)),
+                t.number(style, 6).map(|v| json!(v)),
+            ];
+            for (list, value) in runs.iter_mut().zip(values) {
+                if let Some(value) = value {
+                    list.push(json!([first, value]));
+                }
+            }
+        }
+        let mut sheet = serde_json::Map::new();
+        sheet.insert("mText".into(), json!(words));
+        for (key, list) in KEYS.iter().zip(runs) {
+            if !list.is_empty() {
+                sheet.insert((*key).into(), json!({ "mParamValues": list }));
+            }
+        }
+        let mut param = serde_json::Map::new();
+        param.insert("mStyleSheet".into(), Value::Object(sheet));
+        let mut put = |key: &str, value: Option<Value>| {
+            if let Some(value) = value {
+                param.insert(key.into(), value);
+            }
+        };
+        put("mAlignment", t.field(text, 4).and_then(|at| t.u32(at)).map(|v| json!(v)));
+        put("mShadowColor", t.colour(text, 10).map(|v| json!(v)));
+        put("mShadowVisible", t.flag(text, 11).map(|v| json!(v)));
+        put("mShadowOpacity", t.number(text, 12).map(|v| json!(v)));
+        put("mShadowOffset", t.number(text, 14).map(|v| json!(v)));
+        put("mShadowAngle", t.number(text, 16).map(|v| json!(v)));
+        Some(json!({ "mTextParam": param }))
+    }
 }
 
 /// Standard base64 with `=` padding; white space between characters is skipped.
