@@ -490,3 +490,110 @@ fn decoder_moves_between_threads() {
     let out = std::thread::spawn(move || decode_all(hw.as_mut(), &samples[..30])).join().unwrap();
     assert_same("second thread", &out, &reference);
 }
+
+// DIAG (scratch branch only, never pushed): every fixture through the raw VA-API decoder (no
+// hand-over to software), each phase of `parity` reported instead of stopping at the first failure.
+fn diag_decode(d: &mut dyn VideoDecoder, samples: &[(Vec<u8>, i64)], base: usize) -> Result<Vec<filmcraft_codecs::DecodedFrame>, String> {
+    let mut out = Vec::new();
+    for (i, (s, p)) in samples.iter().enumerate() {
+        match d.decode(s, *p) {
+            Ok(f) => out.extend(f),
+            Err(e) => return Err(format!("sample {} (pts {p}): {e}", base + i)),
+        }
+    }
+    out.extend(d.flush());
+    Ok(out)
+}
+
+fn diag_same(what: &str, a: &[filmcraft_codecs::DecodedFrame], b: &[filmcraft_codecs::DecodedFrame]) -> String {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| assert_same(what, a, b))) {
+        Ok(()) => "ok".into(),
+        Err(e) => format!("MISMATCH {}", e.downcast_ref::<String>().cloned().unwrap_or_default()),
+    }
+}
+
+#[test]
+#[ignore]
+fn diag_every_fixture_every_phase() {
+    let ff = filmcraft_testkit::require_ffmpeg!();
+    let mut streams = small_streams(&ff);
+    let closed = h264_fixture(&ff, "va_h264_closed_gop_diag.mp4", "high", "bframes=3:b-pyramid=normal:keyint=24:min-keyint=24:scenecut=0:open-gop=0").unwrap();
+    streams.push(("va_h264_closed_gop_diag.mp4".into(), read_stream(&closed)));
+    let only = std::env::var("FC_DIAG_ONLY").ok();
+    let mut table = Vec::new();
+    for (name, s) in &streams {
+        if only.as_ref().is_some_and(|o| !name.contains(o.as_str())) {
+            continue;
+        }
+        let info = NalStreamInfo::from_entry(&s.entry).unwrap().unwrap();
+        let mut hw: Box<dyn VideoDecoder> = match VaDecoder::new(info.clone()) {
+            Ok(d) => Box::new(d),
+            Err(e) => {
+                table.push(format!("{name}: no VA-API decoder: {e}"));
+                continue;
+            }
+        };
+        let mut sw = software(s);
+        let mut row = |phase: String, r: String| {
+            eprintln!("DIAG {name} {phase}: {r}");
+            table.push(format!("{name} | {phase} | {r}"));
+        };
+        eprintln!("DIAG {name}: straight");
+        let b = decode_all(sw.as_mut(), &s.samples);
+        let r = match diag_decode(hw.as_mut(), &s.samples, 0) {
+            Ok(a) => diag_same(name, &a, &b),
+            Err(e) => format!("ERR {e}"),
+        };
+        row("straight".into(), r);
+        let syncs: Vec<usize> = (1..s.samples.len()).filter(|&i| s.sync[i]).collect();
+        for &k in syncs.iter().rev() {
+            let end = (k + 17).min(s.samples.len());
+            hw.reset();
+            sw.reset();
+            if std::env::var_os("FC_DIAG_FRESH").is_some() {
+                hw = Box::new(VaDecoder::new(info.clone()).unwrap()); // a session whose surfaces were never decoded into
+            }
+            let idr = info.nal_types(&s.samples[k].0).contains(&5);
+            eprintln!("DIAG {name}: reseek to {k} (idr={idr})");
+            let mut b = decode_all(sw.as_mut(), &s.samples[k..end]);
+            let r = match diag_decode(hw.as_mut(), &s.samples[k..end], k) {
+                Ok(mut a) => {
+                    if info.codec == filmcraft_codecs::hw::NalCodec::H264 && !idr {
+                        let start = s.samples[k].1;
+                        a.retain(|f| f.pts >= start);
+                        b.retain(|f| f.pts >= start);
+                    }
+                    diag_same(name, &a, &b)
+                }
+                Err(e) => format!("ERR {e}"),
+            };
+            row(format!("reseek {k} (idr={idr})"), r);
+        }
+        if info.codec == filmcraft_codecs::hw::NalCodec::H264 {
+            hw.reset();
+            sw.reset();
+            let mid = s.samples.len() / 2;
+            eprintln!("DIAG {name}: flush at {mid}");
+            let mut b = decode_all(sw.as_mut(), &s.samples[..mid]);
+            b.extend(decode_all(sw.as_mut(), &s.samples[mid..]));
+            let r = match diag_decode(hw.as_mut(), &s.samples[..mid], 0).and_then(|mut a| {
+                a.extend(diag_decode(hw.as_mut(), &s.samples[mid..], mid)?);
+                Ok(a)
+            }) {
+                Ok(a) => diag_same(name, &a, &b),
+                Err(e) => format!("ERR {e}"),
+            };
+            row(format!("flush at {mid}"), r);
+        }
+        hw.reset();
+        sw.reset();
+        eprintln!("DIAG {name}: after resets");
+        let b = decode_all(sw.as_mut(), &s.samples);
+        let r = match diag_decode(hw.as_mut(), &s.samples, 0) {
+            Ok(a) => diag_same(name, &a, &b),
+            Err(e) => format!("ERR {e}"),
+        };
+        row("after resets".into(), r);
+    }
+    eprintln!("DIAG TABLE\n{}", table.join("\n"));
+}

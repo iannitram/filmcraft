@@ -286,8 +286,16 @@ impl<A: Accel> Front<A> {
         for e in self.dpb.entries.iter_mut().filter(|e| e.frame.index == UNASSIGNED) {
             let index = free.next().ok_or_else(|| decode_err("no free surface for a frame_num gap"))?;
             self.seq += 1;
-            e.frame = Surface { index, top: 0, bottom: 0, seq: self.seq };
+            // DIAG experiment: FC_VA_EXP=poc gives each gap frame its own (VA-visible) order count
+            let exp_poc = if std::env::var("FC_VA_EXP").is_ok_and(|v| v.contains("poc")) { -1000 - e.frame_num as i32 } else { 0 };
+            e.frame = Surface { index, top: exp_poc, bottom: exp_poc, seq: self.seq };
             fills.push(index);
+        }
+        if std::env::var_os("FC_VA_TRACE").is_some() {
+            eprintln!("VA-TRACE gap before frame_num={}: fill surfaces {fills:?} from {last:?}", sh.frame_num);
+        }
+        if std::env::var("FC_VA_EXP").is_ok_and(|v| v.contains("nofill")) {
+            fills.clear(); // DIAG experiment: leave the gap surfaces as they are (no vaPutImage)
         }
         for index in fills {
             self.accel.fill(index, last).map_err(decode_err)?;
@@ -315,11 +323,72 @@ impl<A: Accel> Front<A> {
             BottomFieldOrderCnt: p.poc.bottom,
             va_reserved: [0; ffi::VA_PADDING_LOW],
         };
-        for (slot, e) in pic.ReferenceFrames.iter_mut().zip(self.dpb.entries.iter().filter(|e| e.mark != RefMark::Unused)) {
+        // DIAG experiment: FC_VA_EXP=order lists decoded references before frame_num gap frames
+        let mut exp_refs: Vec<&DpbEntry<Surface>> = self.dpb.entries.iter().filter(|e| e.mark != RefMark::Unused).collect();
+        if std::env::var("FC_VA_EXP").is_ok_and(|v| v.contains("order")) {
+            exp_refs.sort_by_key(|e| e.non_existing);
+        }
+        if std::env::var("FC_VA_EXP").is_ok_and(|v| v.contains("used")) {
+            // DIAG experiment: decoded first, gap frames only when a slice lists them
+            let used = |e: &DpbEntry<Surface>| {
+                let id = surfaces.get(e.frame.index).copied();
+                p.slices.iter().any(|(sp, _)| {
+                    let l0 = sp.RefPicList0.iter().take(usize::from(sp.num_ref_idx_l0_active_minus1) + 1);
+                    let l1 = sp.RefPicList1.iter().take(usize::from(sp.num_ref_idx_l1_active_minus1) + 1);
+                    l0.chain(l1).any(|v| v.flags & ffi::VA_PICTURE_H264_INVALID == 0 && Some(v.picture_id) == id)
+                })
+            };
+            exp_refs.retain(|e| !e.non_existing || used(e));
+            exp_refs.sort_by_key(|e| e.non_existing);
+        }
+        if std::env::var("FC_VA_EXP").is_ok_and(|v| v.contains("omit")) {
+            exp_refs.retain(|e| !e.non_existing); // DIAG experiment: gap frames not listed at all
+        }
+        for (slot, e) in pic.ReferenceFrames.iter_mut().zip(exp_refs) {
             *slot = va_ref(e, surfaces);
         }
         let iq = iq_matrix(&p.pps);
-        self.accel.decode_h264(p.target, &pic, &iq, &p.slices).map_err(decode_err)?;
+        // DIAG (scratch branch only): describe the picture, its DPB references and its lists
+        let surfaces: Vec<ffi::VASurfaceID> = surfaces.to_vec();
+        let describe = |dpb: &Dpb<Surface>| {
+            let mut s = format!(
+                "pic surf={} type={:?} nal_ref_idc={} frame_num={} poc=({},{}) pts={} idr={}",
+                p.target, p.first.slice_type, p.first.nal_ref_idc, p.first.frame_num, p.poc.top, p.poc.bottom, p.pts, p.first.idr
+            );
+            for e in dpb.entries.iter().filter(|e| e.mark != RefMark::Unused) {
+                s += &format!(
+                    "\n    ref surf={} frame_num={} poc={} top={} bot={} mark={:?} {}",
+                    e.frame.index,
+                    e.frame_num,
+                    e.poc,
+                    e.frame.top,
+                    e.frame.bottom,
+                    e.mark,
+                    if e.non_existing { "GAP-FILLED(vaPutImage)" } else { "decoded" }
+                );
+            }
+            let order: Vec<i64> = pic
+                .ReferenceFrames
+                .iter()
+                .take_while(|v| v.flags & ffi::VA_PICTURE_H264_INVALID == 0)
+                .map(|v| surfaces.iter().position(|&x| x == v.picture_id).map_or(-1, |i| i as i64))
+                .collect();
+            s += &format!("\n    VA ReferenceFrames order (surf) = {order:?}");
+            for (k, (sp, _)) in p.slices.iter().enumerate() {
+                let id = |v: &VAPictureH264| surfaces.iter().position(|&x| x == v.picture_id).map_or(-1, |i| i as i64);
+                let l0: Vec<_> = sp.RefPicList0.iter().take(sp.num_ref_idx_l0_active_minus1 as usize + 1).map(|v| (id(v), v.frame_idx, v.TopFieldOrderCnt)).collect();
+                let l1: Vec<_> = sp.RefPicList1.iter().take(sp.num_ref_idx_l1_active_minus1 as usize + 1).map(|v| (id(v), v.frame_idx, v.TopFieldOrderCnt)).collect();
+                s += &format!("\n    slice {k} type={} direct_spatial={} L0(surf,frame_idx,poc)={l0:?} L1={l1:?}", sp.slice_type, sp.direct_spatial_mv_pred_flag);
+            }
+            s
+        };
+        if std::env::var_os("FC_VA_TRACE").is_some() {
+            eprintln!("VA-TRACE submit {}", describe(&self.dpb));
+        }
+        if let Err(e) = self.accel.decode_h264(p.target, &pic, &iq, &p.slices) {
+            eprintln!("VA-DIAG decode_h264 FAILED ({e}): {}", describe(&self.dpb));
+            return Err(decode_err(e));
+        }
 
         self.poc_state.update(&p.first, &p.poc);
         let mmco5 = p.first.has_mmco5();
