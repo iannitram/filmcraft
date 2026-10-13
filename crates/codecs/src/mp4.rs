@@ -374,6 +374,7 @@ impl Mp4Source {
             })
             .collect();
         rebase_unedited_video(&mut file, vtrack, &mut audios);
+        start_edit_at_first_picture(&mut file, vtrack);
         Ok(Self { info, bytes, file, vtrack, video: GopCache::new(explicit_color).with_rotation(rotation).with_crop(aperture), audios })
     }
 
@@ -718,6 +719,32 @@ fn rebase_unedited_video(file: &mut Mp4File, vtrack: Option<usize>, audios: &mut
     let v = if shift == video_start { first } else { shift.to_rational_round(1, vts) };
     if let Some(t) = file.tracks.get_mut(vi) {
         t.edit_offset = t.edit_offset.saturating_sub(v);
+    }
+}
+
+/// Start an edited video track at its first picture when its edit starts before any picture: the
+/// counterpart of [`rebase_unedited_video`] for a track that has an edit list. A B-frame stream's
+/// first picture sits at its reorder delay on the media timeline, and the edit is there to take
+/// that back (`media_time` = the delay, as ffmpeg, x264 and newer Adobe exports write it). Some
+/// writers leave `media_time` at 0 (measured on H.264 MP4s of a 2016 Adobe Media Encoder: one
+/// frame of composition offset on the first sample, an edit from 0 as long as every picture). To
+/// the letter such a file shows nothing for its first frame and never shows its last picture;
+/// picture 0 was held for two frames and every cut made on the file in another editor fell one
+/// frame late. Premiere, After Effects and ffmpeg (which moves a track back by its earliest
+/// presented timestamp) show the first picture on frame zero.
+///
+/// Only the video track moves: the file's sound already starts where its own edit says. Leading
+/// empty edits are a delay somebody asked for and stay. The gap closed is never more than the
+/// first sample's own composition offset, so a track that really starts late (a fragment cut out
+/// of a longer stream, whose decode times start late too) is left as it is.
+fn start_edit_at_first_picture(file: &mut Mp4File, vtrack: Option<usize>) {
+    let Some(t) = vtrack.and_then(|vi| file.tracks.get_mut(vi)) else { return };
+    let Some(start) = t.edits.iter().map(|e| e.media_time).find(|&m| m != -1) else { return };
+    let Some(first) = t.samples.iter().map(|s| s.pts).min() else { return };
+    let delay = t.samples.first().map_or(0, |s| s.pts.saturating_sub(s.dts));
+    let gap = first.saturating_sub(start);
+    if start >= 0 && gap > 0 && gap <= delay {
+        t.edit_offset = t.edit_offset.saturating_sub(gap);
     }
 }
 
