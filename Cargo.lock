@@ -1015,8 +1015,13 @@ dependencies = [
 name = "craft-log"
 version = "0.1.0"
 dependencies = [
+ "craft-stage",
  "log",
 ]
+
+[[package]]
+name = "craft-stage"
+version = "0.1.0"
 
 [[package]]
 name = "craft-ui"
