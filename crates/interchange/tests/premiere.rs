@@ -625,6 +625,42 @@ fn premiere_dissolves_without_controls_are_timeline_transitions() {
     }
 }
 
+/// Transitions FilmCraft has under the same name come across; a slide or a wipe comes from the
+/// edge it had (the file has one bit for each edge: top 1, right 2, bottom 4, left 8).
+#[test]
+fn premiere_slide_wipe_morph_cut_and_their_like_are_timeline_transitions() {
+    use filmcraft_project::ParamValue;
+    for (match_name, id, edge, direction) in [
+        ("ADBE Slide", "slide", 2, Some(1)),
+        ("ADBE Slide", "slide", 8, Some(3)),
+        ("ADBE Wipe", "wipe", 1, Some(0)),
+        ("ADBE Wipe", "wipe", 4, Some(2)),
+        ("ADBE Split", "split", 10, None),
+        ("ADBE Flip Over", "flip_over", 10, None),
+        ("ADBE Page Turn", "page_turn", 128, None),
+        ("ADBE Cross Zoom", "cross_zoom", 0, None),
+        ("AE.ADBE MorphCut", "morph_cut", 0, None),
+    ] {
+        let xml = project_with_transition(true, match_name, &format!("<Reverse>false</Reverse><Direction>{edge}</Direction>"));
+        let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+        assert!(!report.has_warnings(), "{match_name}: {report}");
+        let track = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0];
+        assert_eq!(track.transitions.len(), 1, "{match_name} was skipped");
+        let transition = &track.transitions[0];
+        assert_eq!(transition.effect.effect, id, "{match_name}");
+        assert_eq!(transition.from, Some(track.items[0].id), "{match_name}");
+        if let Some(want) = direction {
+            let value = &transition.effect.param("direction").unwrap().value;
+            assert!(matches!(value, ParamValue::Choice(v) if *v == want), "{match_name} from edge {edge}: {value:?}");
+        }
+    }
+    // a slide from a corner: FilmCraft's comes from an edge, so it keeps its default and says so
+    let xml = project_with_transition(true, "ADBE Slide", "<Direction>128</Direction>");
+    let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+    assert_eq!(imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].transitions.len(), 1);
+    assert!(report.to_string().contains("direction was left"), "{report}");
+}
+
 /// Newer projects write an audio crossfade with an adjustable curve as "Custom Fade", with a
 /// shape type and value. It becomes the nearest of the three fades FilmCraft has, and the
 /// report says the curve itself was not kept.
