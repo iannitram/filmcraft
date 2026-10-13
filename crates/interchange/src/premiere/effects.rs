@@ -12,7 +12,13 @@ enum Conversion {
     Native,
     Point((u32, u32)),
     Gain,
+    /// A number on another scale: multiplied by this factor.
+    Scaled(f64),
 }
+
+/// Opaque black as a native colour value: the default of every colour control seen so far. How
+/// the other colours are packed into that number is not known, so they are not read.
+const OPAQUE_BLACK: &str = "18374686479671623680";
 
 /// What to do with a parameter whose value cannot be read.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -45,6 +51,9 @@ pub(super) fn component(
         "AE.ADBE Offset" => "offset",
         "AE.ADBE Motion Blur" => "directional_blur",
         "AE.ADBE Gaussian Blur 2" => "gaussian_blur",
+        "AE.ADBE Brightness & Contrast 2" => "brightness_contrast",
+        "AE.ADBE Drop Shadow" => "drop_shadow",
+        "AE.ADBE Basic 3D" => "basic_3d",
         // effects without controls: the match name is all there is to carry over (each has an
         // older "PR." and a newer "AE." name)
         "AE.ADBE Horizontal Flip" | "PR.ADBE Horizontal Flip" => "horizontal_flip",
@@ -100,6 +109,17 @@ pub(super) fn component(
             ("directional_blur", 2) => Some(("length", Conversion::Native)),
             ("gaussian_blur", 1) => Some(("blurriness", Conversion::Native)),
             ("gaussian_blur", 3) => Some(("repeat_edge", Conversion::Native)),
+            ("brightness_contrast", 1) => Some(("brightness", Conversion::Native)),
+            ("brightness_contrast", 2) => Some(("contrast", Conversion::Native)),
+            // Drop Shadow's opacity runs 0 to 255 in the file, 0 to 100 % here
+            ("drop_shadow", 2) => Some(("opacity", Conversion::Scaled(100.0 / 255.0))),
+            ("drop_shadow", 3) => Some(("direction", Conversion::Native)),
+            ("drop_shadow", 4) => Some(("distance", Conversion::Native)),
+            ("drop_shadow", 5) => Some(("softness", Conversion::Native)),
+            ("drop_shadow", 6) => Some(("only", Conversion::Native)),
+            ("basic_3d", 1) => Some(("swivel", Conversion::Native)),
+            ("basic_3d", 2) => Some(("tilt", Conversion::Native)),
+            ("basic_3d", 3) => Some(("distance", Conversion::Native)),
             ("volume", 2) => Some(("level", Conversion::Gain)),
             _ => None,
         };
@@ -131,7 +151,16 @@ pub(super) fn component(
             let neutral = !graph.boolean(native, &["IsTimeVarying"], false)?
                 && ((id == "motion" && (8..=11).contains(&number) && static_text(native).is_none_or(|v| v.parse::<f64>().ok() == Some(0.0)))
                     || (id == "transform" && number == 12 && static_text(native) == Some("0"))
-                    || (id == "opacity" && ((number == 2 && static_text(native) == Some("18")) || (number == 3 && static_text(native) == Some("0")))));
+                    || (id == "opacity" && ((number == 2 && static_text(native) == Some("18")) || (number == 3 && static_text(native) == Some("0"))))
+                    // the shadow colour left at black, which is the default here too
+                    || (id == "drop_shadow" && number == 1 && static_text(native) == Some(OPAQUE_BLACK))
+                    // Specular Highlight and Draw Preview Wireframe, switched off
+                    || (id == "basic_3d" && (4..=5).contains(&number) && static_text(native) == Some("false"))
+                    // the older "PR." effects without controls carry one empty placeholder
+                    || (matches!(id, "horizontal_flip" | "vertical_flip" | "black_white")
+                        && number == -1
+                        && native.has_tag_name("ArbVideoComponentParam")
+                        && static_text(native).is_none()));
             if !neutral {
                 report.warn(format!("Premiere effect {match_name} parameter {number} is not supported; the FilmCraft default was used"));
             }
@@ -176,6 +205,7 @@ fn value(text: &str, default: &ParamValue, conversion: Conversion, graph: &Graph
             }
             Ok(ParamValue::Float(if gain == 0.0 { -287.5 } else { (20.0 * gain.log10()).max(-287.5) }))
         }
+        Conversion::Scaled(factor) => Ok(ParamValue::Float(finite(text, graph)? * factor)),
         Conversion::Native => match default {
             ParamValue::Bool(_) => match text {
                 "true" | "1" => Ok(ParamValue::Bool(true)),
@@ -248,8 +278,9 @@ fn parameter(
         } else {
             Interpolation::Linear
         };
-        approximated |=
-            in_speed != 0.0 || out_speed != 0.0 || fields.get(10 + usize::from(old_point)..).is_some_and(|v| v.iter().any(|s| s.parse::<f64>().is_ok_and(|v| v != 0.0)));
+        approximated |= in_speed != 0.0
+            || out_speed != 0.0
+            || fields.get(10 + usize::from(old_point)..).is_some_and(|v| v.iter().any(|s| s.parse::<f64>().is_ok_and(|v| v != 0.0)));
         p.keyframes.push(key);
     }
     p.keyframes.sort_by_key(|k| k.time);
