@@ -868,6 +868,22 @@ fn premiere_text_of_a_graphic_becomes_a_text_layer() {
     assert!(!sequence.audio_tracks[0].items[0].enabled);
 }
 
+/// A title of more than one line: the application ends each line with a carriage return, and a
+/// text layer breaks its lines at line feeds, so line feeds are what the layer holds (a carriage
+/// return among a layer's words is drawn as a missing character). One character stays one
+/// character, so the places of the style runs hold.
+#[test]
+fn premiere_text_of_more_than_one_line_breaks_at_line_feeds() {
+    use filmcraft_project::ParamValue;
+    let json = TITLE_JSON.replace("A synthetic title", r"First line\rSecond\rThird");
+    let xml = project_with_text_layer(&source_text_json(&json));
+    let (imported, _) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+    let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+    let layer = video.graphic_layers().next().expect("a text layer");
+    let ParamValue::Text(words) = &layer.param("text").unwrap().value else { panic!("the words are text") };
+    assert_eq!(words, "First line\nSecond\nThird");
+}
+
 /// Source Text that is not the JSON form (newer versions write a binary one), or is damaged, is
 /// left alone: the clip stays on the timeline switched off and the report names the component.
 #[test]
