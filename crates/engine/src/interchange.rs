@@ -76,6 +76,7 @@ pub fn import(s: &mut Session, path: &str, bytes: &[u8], format: Format) -> Resu
         .collect();
     let mut linked = 0;
     let mut offline = Vec::new();
+    let mut not_found = Vec::new();
     for (id, mpath) in new_media {
         match s.media.open_file(&mpath, &*s.services).ok() {
             Some(src) => {
@@ -104,8 +105,31 @@ pub fn import(s: &mut Session, path: &str, bytes: &[u8], format: Format) -> Resu
                 s.media.insert_file(id, &mpath, src);
                 linked += 1;
             }
-            None => offline.push(mpath),
+            None => {
+                if format == Format::PremiereProject && !mpath.is_empty() {
+                    not_found.push(id);
+                }
+                offline.push(mpath)
+            }
         }
+    }
+    // A Premiere project names its files where they were on the machine that saved it. On
+    // another machine each one is simply not there yet: leave it "missing", which Link Media's
+    // folder mapping and Relink Moved Media work on, not "made offline", which they skip because
+    // it reads as someone's deliberate Make Offline. Sources with no file at all (graphics made
+    // inside Premiere) have an empty path and stay offline placeholders.
+    if !not_found.is_empty() {
+        s.edit("Link Media", |proj, _| {
+            for id in &not_found {
+                if let Some(item) = proj.items.get_mut(id)
+                    && let ItemKind::Media(m) = &mut item.kind
+                {
+                    m.offline = false;
+                }
+            }
+            Ok(())
+        })?;
+        crate::relink::refresh(s);
     }
     if let Some(&first) = seqs.first() {
         s.state.active_sequence = Some(first);
