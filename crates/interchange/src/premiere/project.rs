@@ -290,6 +290,11 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                         }
                         None => (start, duration, source_in),
                     };
+                    // ...and one that ends before its media starts plays nothing at all
+                    if (-super::MAX_TIME_TICKS..0).contains(&source_in) && (source_in..=0).contains(&source_out) {
+                        self.report.warn(format!("Premiere clip \"{}\" lies wholly before its media and plays nothing; it was skipped", shortened(name, 120)));
+                        continue;
+                    }
                     if !(0..=super::MAX_TIME_TICKS).contains(&source_in) || source_out < source_in || (!still && source_out > super::MAX_TIME_TICKS) {
                         return Err(error(PROJECT, "invalid clip source range"));
                     }
@@ -451,7 +456,7 @@ fn empty_head(duration: i64, source_in: i64, source_out: i64, still: bool) -> Op
         return None;
     }
     let head = (i128::from(duration) * i128::from(-source_in)).div_euclid(span);
-    i64::try_from(head).ok().filter(|head| (1..duration).contains(head))
+    i64::try_from(head).ok().filter(|head| (0..duration).contains(head))
 }
 
 /// At most `max` characters of `text`, for a report line.
