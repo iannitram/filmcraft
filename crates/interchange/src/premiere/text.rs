@@ -332,6 +332,9 @@ mod binary {
     const MAX_ITEMS: usize = 4096;
     const MAX_STRING: usize = 1 << 20;
 
+    /// The distance of a shadow whose distance is not written (the application's default).
+    const SHADOW_DISTANCE: f64 = 7.0;
+
     /// Bounds-checked reads of the table-and-offset data: every position comes from the file.
     struct Tables<'a>(&'a [u8]);
 
@@ -399,10 +402,17 @@ mod binary {
     /// The text of `data` (what follows the marker) as the JSON form would hold it.
     ///
     /// Fields read, by number. The text table (field 0 of the root): 0 the runs, 1 the font
-    /// names, 4 the alignment, 10 the shadow colour, 11 shadow shown, 12 its opacity, 14 its
-    /// distance, 16 its angle. A run: 0 its words, 1 its style. A style: 0 the number of its
-    /// font in the list, 1 the size, 2 the fill colour, 3 fill shown, 4 the stroke colour,
-    /// 5 stroke shown, 6 the stroke width.
+    /// names, 4 the alignment, 6 the leading, 10 the shadow colour, 11 shadow shown, then the
+    /// shadow's five numbers in a row: 12 opacity, 13 angle, 14 distance, 15 size, 16 blur; 17
+    /// the background colour, 18 background shown, 19 its opacity, 20 its size. A run: 0 its
+    /// words, 1 its style. A style: 0 the number of its font in the list, 1 the size, 2 the fill
+    /// colour, 3 fill shown, 4 the stroke colour, 5 stroke shown, 6 the stroke width.
+    ///
+    /// Which of 13, 15 and 16 is which was settled by their values over 1,124 titles: 13 holds
+    /// negative numbers (an angle; the other two cannot be negative), 15 is nearly never written
+    /// (a size is 0 unless someone sets it) and 16 nearly always (a blur is rarely left at 40).
+    /// A value at its default is not written. The defaults are FilmCraft's too, except the
+    /// shadow's distance: 7 there, 10 here.
     pub(super) fn document(data: &[u8]) -> Option<Value> {
         let t = Tables(data);
         let root = usize::try_from(t.u32(0)?).ok()?;
@@ -450,11 +460,19 @@ mod binary {
             }
         };
         put("mAlignment", t.field(text, 4).and_then(|at| t.u32(at)).map(|v| json!(v)));
+        put("mLeading", t.number(text, 6).map(|v| json!(v)));
+        let shadow = t.flag(text, 11);
         put("mShadowColor", t.colour(text, 10).map(|v| json!(v)));
-        put("mShadowVisible", t.flag(text, 11).map(|v| json!(v)));
+        put("mShadowVisible", shadow.map(|v| json!(v)));
         put("mShadowOpacity", t.number(text, 12).map(|v| json!(v)));
-        put("mShadowOffset", t.number(text, 14).map(|v| json!(v)));
-        put("mShadowAngle", t.number(text, 16).map(|v| json!(v)));
+        put("mShadowAngle", t.number(text, 13).map(|v| json!(v)));
+        put("mShadowOffset", t.number(text, 14).or(shadow.filter(|shown| *shown).map(|_| SHADOW_DISTANCE)).map(|v| json!(v)));
+        put("mShadowSize", t.number(text, 15).map(|v| json!(v)));
+        put("mShadowBlur", t.number(text, 16).map(|v| json!(v)));
+        put("mBackFillColor", t.colour(text, 17).map(|v| json!(v)));
+        put("mBackFillVisible", t.flag(text, 18).map(|v| json!(v)));
+        put("mBackFillOpacity", t.number(text, 19).map(|v| json!(v)));
+        put("mBackFillSize", t.number(text, 20).map(|v| json!(v)));
         Some(json!({ "mTextParam": param }))
     }
 }
