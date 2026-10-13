@@ -94,10 +94,12 @@ impl Report {
     }
 
     /// The switches in force: every environment variable starting with `CRAFT_`, `RUST_LOG`, and
-    /// those starting with one of the app's `prefixes` (`FILMCRAFT_`, `WGPU_`), values masked.
-    pub fn add_switches(&mut self, prefixes: &[&str]) {
+    /// those starting with one of the app's `prefixes` (`FILMCRAFT_`, `WGPU_`), the home folder
+    /// masked. A switch named in `secret` (`PHOTOCRAFT_CONTROL_TOKEN`), or whose name says it holds
+    /// a secret ([`is_secret_name`]), shows only "set (***)".
+    pub fn add_switches(&mut self, prefixes: &[&str], secret: &[&str]) {
         let vars: Vec<(String, String)> = std::env::vars_os().filter_map(|(k, v)| Some((k.into_string().ok()?, v.to_string_lossy().into_owned()))).collect();
-        let found = switches(&vars, prefixes);
+        let found = switches(&vars, prefixes, secret);
         if found.is_empty() {
             self.add("switches", "environment", "none");
         }
@@ -178,28 +180,69 @@ fn read(path: &str) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
-/// `~` in place of the home folder (`$HOME`, or `%USERPROFILE%` on Windows), wherever it starts a
-/// path in `text`.
+/// `~` in place of this machine's home folder ([`home_folders`]), wherever it is a whole path or
+/// starts one in `text`. On Windows the match ignores ASCII case, as its file names do.
 pub fn mask_home(text: &str) -> String {
-    let home = std::env::var("HOME").ok().or_else(|| std::env::var("USERPROFILE").ok());
-    mask_with(text, home.as_deref())
+    let homes = home_folders(&|k| std::env::var(k).ok(), cfg!(windows));
+    mask_homes(text, &homes, cfg!(windows))
 }
 
-/// [`mask_home`] with the home folder given: each occurrence followed by a path separator, the
-/// end of the text, or a character that cannot be in a name (space, quote, `:`, `;`), becomes `~`.
-/// `/home/deckard` is left alone when the home folder is `/home/deck`.
-pub fn mask_with(text: &str, home: Option<&str>) -> String {
-    let Some(home) = home.map(|h| h.trim_end_matches(['/', '\\'])).filter(|h| h.len() > 1) else { return text.to_owned() };
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(i) = rest.find(home) {
-        let after = &rest[i + home.len()..];
-        let boundary = after.chars().next().is_none_or(|c| matches!(c, '/' | '\\' | ' ' | '"' | '\'' | ':' | ';' | ',' | ')'));
-        out.push_str(&rest[..i]);
-        out.push_str(if boundary { "~" } else { home });
-        rest = after;
+/// The home folders to mask, longest first: on Unix `HOME`; on Windows `USERPROFILE`,
+/// `HOMEDRIVE` + `HOMEPATH`, and `HOME` when set (Git Bash and MSYS set it), each also written with
+/// forward slashes. `env` reads a variable (tests pass their own).
+pub fn home_folders(env: &dyn Fn(&str) -> Option<String>, windows: bool) -> Vec<String> {
+    let mut homes: Vec<String> = Vec::new();
+    let mut add = |h: Option<String>| {
+        if let Some(h) = h.map(|h| h.trim_end_matches(['/', '\\']).to_owned()).filter(|h| h.len() > 1) {
+            let forward = h.replace('\\', "/");
+            homes.push(h);
+            if windows {
+                homes.push(forward);
+            }
+        }
+    };
+    if windows {
+        add(env("USERPROFILE"));
+        add(env("HOMEDRIVE").zip(env("HOMEPATH")).map(|(d, p)| format!("{d}{p}")));
     }
-    out.push_str(rest);
+    add(env("HOME"));
+    homes.sort_by_key(|h| std::cmp::Reverse(h.len()));
+    homes.dedup();
+    homes
+}
+
+/// [`mask_home`] with the home folder given (case as given).
+pub fn mask_with(text: &str, home: Option<&str>) -> String {
+    let homes: Vec<String> = home.map(|h| h.trim_end_matches(['/', '\\']).to_owned()).into_iter().collect();
+    mask_homes(text, &homes, false)
+}
+
+/// Each occurrence of one of `homes` (tried in order) that is not followed by a character that
+/// could continue a folder name (a letter, a digit, `_` or `-`) becomes `~`: `/home/deck/x`,
+/// `/home/deck.`, `[/home/deck]`, `/home/deck&` and a home at the end of a line are masked;
+/// `/home/deckard` is left alone when the home folder is `/home/deck`. A home of one character
+/// (`/`) masks nothing.
+pub fn mask_homes(text: &str, homes: &[String], ignore_ascii_case: bool) -> String {
+    let mut out = text.to_owned();
+    for home in homes.iter().filter(|h| h.len() > 1) {
+        out = mask_one(&out, home, ignore_ascii_case);
+    }
+    out
+}
+
+fn mask_one(text: &str, home: &str, ignore_ascii_case: bool) -> String {
+    // ASCII lower-casing keeps every byte offset, so positions found in the copy hold in `text`
+    let (hay, needle) = if ignore_ascii_case { (text.to_ascii_lowercase(), home.to_ascii_lowercase()) } else { (text.to_owned(), home.to_owned()) };
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    while let Some(i) = hay[at..].find(&needle).map(|i| at + i) {
+        let end = i + needle.len();
+        let continues = text[end..].chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '-');
+        out.push_str(&text[at..i]);
+        out.push_str(if continues { &text[i..end] } else { "~" });
+        at = end;
+    }
+    out.push_str(&text[at..]);
     out
 }
 
@@ -264,11 +307,24 @@ pub fn locale(env: &dyn Fn(&str) -> Option<String>) -> String {
     ["LC_ALL", "LANG"].iter().find_map(|k| env(k).filter(|v| !v.is_empty())).unwrap_or_else(|| UNKNOWN.into())
 }
 
+/// What a secret switch shows in place of its value.
+pub const SECRET_SET: &str = "set (***)";
+
+/// Whether a switch's name says it holds a secret (`…TOKEN…`, `…SECRET…`, `…PASSWORD…`,
+/// `…PASSWD…`, `…CREDENTIAL…`, `…API_KEY…`, `…AUTH…`), a guard for switches nobody listed.
+pub fn is_secret_name(name: &str) -> bool {
+    let n = name.to_ascii_uppercase();
+    ["TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "API_KEY", "AUTH"].iter().any(|w| n.contains(w))
+}
+
 /// The switches among `vars`: `CRAFT_*`, `RUST_LOG`, and names starting with one of `prefixes`,
-/// sorted by name.
-pub fn switches(vars: &[(String, String)], prefixes: &[&str]) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> =
-        vars.iter().filter(|(k, _)| k.starts_with("CRAFT_") || k == "RUST_LOG" || prefixes.iter().any(|p| k.starts_with(p))).cloned().collect();
+/// sorted by name; those named in `secret` or by [`is_secret_name`] show [`SECRET_SET`].
+pub fn switches(vars: &[(String, String)], prefixes: &[&str], secret: &[&str]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = vars
+        .iter()
+        .filter(|(k, _)| k.starts_with("CRAFT_") || k == "RUST_LOG" || prefixes.iter().any(|p| k.starts_with(p)))
+        .map(|(k, v)| if secret.contains(&k.as_str()) || is_secret_name(k) { (k.clone(), SECRET_SET.to_owned()) } else { (k.clone(), v.clone()) })
+        .collect();
     out.sort();
     out
 }
@@ -362,6 +418,25 @@ mod tests {
     }
 
     #[test]
+    fn the_home_folder_is_masked_before_any_character_that_cannot_continue_its_name() {
+        let home = Some("/home/deck");
+        for (text, want) in [
+            ("see /home/deck.", "see ~."),
+            ("[/home/deck]", "[~]"),
+            ("<path>/home/deck</path>", "<path>~</path>"),
+            ("a=/home/deck&b=1", "a=~&b=1"),
+            ("/home/deck\nnext", "~\nnext"),
+            ("/home/deck\tx", "~\tx"),
+            ("{\"dir\":\"/home/deck\"}", "{\"dir\":\"~\"}"),
+            ("/home/deck|/home/deck=", "~|~="),
+        ] {
+            assert_eq!(mask_with(text, home), want, "{text:?}");
+        }
+        // another user's folder whose name starts the same is not this home
+        assert_eq!(mask_with("/home/deck_2/x /home/deck-old /home/deck9", home), "/home/deck_2/x /home/deck-old /home/deck9");
+    }
+
+    #[test]
     fn os_release_names_steamos_with_its_build() {
         let steamos = "NAME=\"SteamOS\"\nPRETTY_NAME=\"SteamOS\"\nVERSION_ID=\"3.8\"\nBUILD_ID=\"20260930.1\"\nVARIANT_ID=steamdeck\nID=steamos\n";
         assert_eq!(os_name(steamos), "SteamOS 3.8 (build 20260930.1) [steamdeck]");
@@ -401,8 +476,38 @@ mod tests {
                 .iter()
                 .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
                 .collect();
-        let got: Vec<String> = switches(&vars, &["FILMCRAFT_", "WGPU_"]).into_iter().map(|(k, v)| format!("{k}={v}")).collect();
+        let got: Vec<String> = switches(&vars, &["FILMCRAFT_", "WGPU_"], &[]).into_iter().map(|(k, v)| format!("{k}={v}")).collect();
         assert_eq!(got, ["CRAFT_LOG=debug", "FILMCRAFT_DATA_DIR=/d", "RUST_LOG=info", "WGPU_BACKEND=vulkan"]);
+    }
+
+    #[test]
+    fn a_secret_switch_shows_only_that_it_is_set() {
+        let vars: Vec<(String, String)> = [("APP_CONTROL_TOKEN", "s3cr3t-value"), ("APP_DATA_DIR", "/d"), ("APP_REMOTE", "hunter2")]
+            .iter()
+            .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+            .collect();
+        let got: Vec<String> = switches(&vars, &["APP_"], &["APP_REMOTE"]).into_iter().map(|(k, v)| format!("{k}={v}")).collect();
+        assert!(!got.iter().any(|l| l.contains("s3cr3t-value") || l.contains("hunter2")), "{got:?}");
+        // named in the list, or by its name
+        assert_eq!(got, ["APP_CONTROL_TOKEN=set (***)", "APP_DATA_DIR=/d", "APP_REMOTE=set (***)"]);
+    }
+
+    #[test]
+    fn the_home_folder_comes_from_the_platforms_own_variables() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| move |k: &str| pairs.iter().find(|(a, _)| *a == k).map(|(_, v)| (*v).to_owned());
+        // Windows does not set HOME: USERPROFILE, HOMEDRIVE + HOMEPATH, in both slash styles
+        let win = env(&[("USERPROFILE", "C:\\Users\\sam"), ("HOMEDRIVE", "D:"), ("HOMEPATH", "\\Users\\sam")]);
+        let homes = home_folders(&win, true);
+        assert_eq!(homes, ["C:\\Users\\sam", "C:/Users/sam", "D:\\Users\\sam", "D:/Users/sam"]);
+        assert_eq!(
+            mask_homes("C:\\Users\\sam\\AppData c:\\users\\SAM\\x C:/Users/sam/y D:\\Users\\sam. C:\\Users\\sama", &homes, true),
+            "~\\AppData ~\\x ~/y ~. C:\\Users\\sama"
+        );
+        // Git Bash's HOME is masked too
+        assert!(home_folders(&env(&[("USERPROFILE", "C:\\Users\\sam"), ("HOME", "/c/Users/sam")]), true).contains(&"/c/Users/sam".to_owned()));
+        // Unix: HOME only
+        assert_eq!(home_folders(&env(&[("HOME", "/home/deck/"), ("USERPROFILE", "x:\\y")]), false), ["/home/deck"]);
+        assert!(home_folders(&env(&[("HOME", "/")]), false).is_empty());
     }
 
     #[test]
@@ -430,7 +535,7 @@ mod tests {
     fn the_gathered_fields_are_never_missing() {
         let app = App { name: "testapp", version: "1.0.0", ours: "testapp", default_filter: "info" };
         let mut r = Report::new(&app);
-        r.add_switches(&["TESTAPP_"]);
+        r.add_switches(&["TESTAPP_"], &[]);
         r.add_helpers();
         for (s, k) in [("app", "commit"), ("system", "kernel"), ("system", "session"), ("processor", "threads"), ("memory", "total"), ("helpers", "ffmpeg")] {
             assert!(r.get(s, k).is_some_and(|v| !v.is_empty()), "{s}/{k} in {}", r.text());

@@ -56,7 +56,7 @@ pub fn start_report(data: Option<&Path>, graphics: &GraphicsStart) {
     report::video(&mut r);
     r.add("screens", "screens and window", "known when the window opens: the \"screen\" and \"window:\" lines after this report");
     report::folders(&mut r, data);
-    r.add_switches(report::SWITCH_PREFIXES);
+    r.add_switches(report::SWITCH_PREFIXES, report::SECRET_SWITCHES);
     r.add_helpers();
     let previous = data.map(|d| d.join(report::LOG_DIR).join(report::PREVIOUS_LOG_FILE));
     report::previous_run(&mut r, data, previous.as_deref());
