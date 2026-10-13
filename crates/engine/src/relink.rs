@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use filmcraft_media::MediaInfo;
+use filmcraft_media::{MediaInfo, MediaKind};
 use filmcraft_project::{ItemId, ItemKind, MediaIdentity, MediaRef, Project};
 use filmcraft_time::Tick;
 use serde::{Deserialize, Serialize};
@@ -239,8 +239,12 @@ pub fn check_candidate(s: &Session, item: ItemId, path: &str, o: &MatchOptions) 
         match s.media.open_file(path, &*s.services) {
             Ok(src) => {
                 let info = src.info().clone();
-                let fd = m.info.frame_rate().frame_duration();
-                if o.duration && m.info.duration > Tick::ZERO && (info.duration - m.info.duration).0.abs() > fd.0 {
+                // A still has no length and no frame rate of its own: both numbers are whatever
+                // the application that recorded them shows a still for (a default duration
+                // here, a nominal hour at the project's rate in an imported project).
+                let still = info.kind == MediaKind::Still || m.info.kind == MediaKind::Still;
+                let slack = duration_slack(&m.info, &info);
+                if o.duration && !still && m.info.duration > Tick::ZERO && (info.duration - m.info.duration).0.abs() > slack.0 {
                     c.problems.push(format!("duration differs ({:.3}s vs {:.3}s)", info.duration.seconds(), m.info.duration.seconds()));
                 }
                 if o.media_start && info.start_timecode != m.info.start_timecode {
@@ -248,6 +252,12 @@ pub fn check_candidate(s: &Session, item: ItemId, path: &str, o: &MatchOptions) 
                 }
                 if o.metadata {
                     if let (Some(a), Some(b)) = (&info.video, &m.info.video)
+                        && still
+                    {
+                        if (a.width, a.height) != (b.width, b.height) {
+                            c.problems.push(format!("image size differs ({}×{} vs {}×{})", a.width, a.height, b.width, b.height));
+                        }
+                    } else if let (Some(a), Some(b)) = (&info.video, &m.info.video)
                         && ((a.width, a.height) != (b.width, b.height) || a.frame_rate != b.frame_rate)
                     {
                         c.problems.push(format!(
@@ -278,6 +288,18 @@ pub fn check_candidate(s: &Session, item: ItemId, path: &str, o: &MatchOptions) 
     c.ok = c.problems.is_empty();
     c.score = u32::from(c.identity_match == Some(true)) * 8 + u32::from(name_ok) * 4 + u32::from(ext_ok) * 2 + u32::from(c.ok);
     Ok(c)
+}
+
+/// How far the duration of a candidate file may be from the recorded one and still be the same
+/// media: one frame, or half a second for sound without picture in a compressed format. Decoders
+/// and applications count the padding at the start and end of such a stream (MP3, AAC) each in
+/// their own way, so the same file is a fraction of a second longer or shorter depending on who
+/// measured it; uncompressed sound has an exact length and keeps the one-frame rule.
+fn duration_slack(recorded: &MediaInfo, found: &MediaInfo) -> Tick {
+    let frame = recorded.frame_rate().frame_duration();
+    let sound_only = !recorded.has_video() && !found.has_video();
+    let compressed = found.audio().is_some_and(|a| !a.codec.to_ascii_uppercase().contains("PCM"));
+    if sound_only && compressed { frame.max(Tick(filmcraft_time::TICKS_PER_SECOND / 2)) } else { frame }
 }
 
 /// The folder remap implied by a file moving from `old` to `new`: the longest common trailing
