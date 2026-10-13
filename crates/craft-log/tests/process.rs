@@ -21,6 +21,7 @@ fn main() {
         ("a_failing_test_capture_with_standard_error_full_does_not_abort", a_failing_test_capture_with_standard_error_full_does_not_abort),
         ("a_fifo_in_place_of_the_log_does_not_hang", a_fifo_in_place_of_the_log_does_not_hang),
         ("many_runs_at_once_on_a_full_log_lose_nothing", many_runs_at_once_on_a_full_log_lose_nothing),
+        ("a_secret_argument_is_never_logged", a_secret_argument_is_never_logged),
     ];
     let filter = std::env::args().skip(1).find(|a| !a.starts_with('-'));
     let mut failed = Vec::new();
@@ -46,13 +47,19 @@ fn child(role: &str) {
     match role {
         "run" => {
             wait_for_start();
-            let _ = craft_log::cli::install(&APP, dir.as_deref());
+            let _ = craft_log::cli::install(&APP, dir.as_deref(), &[]);
             log::warn!(target: "app", "child {} ran", std::env::var("CRAFT_LOG_TEST_TAG").unwrap_or_default());
             log::logger().flush();
         }
         "fail" => {
-            let _ = craft_log::cli::install(&APP, dir.as_deref());
+            let _ = craft_log::cli::install(&APP, dir.as_deref(), &[]);
             craft_log::cli::failed(&APP, "the reason it failed");
+            std::process::exit(1);
+        }
+        "secret" => {
+            let _ = craft_log::cli::install(&APP, dir.as_deref(), &["--token"]);
+            log::warn!(target: "app", "connecting with s3cr3t-value");
+            craft_log::cli::failed(&APP, "the server refused other-secret");
             std::process::exit(1);
         }
         "capture-panic" => {
@@ -191,6 +198,30 @@ fn many_runs_at_once_on_a_full_log_lose_nothing() {
         let both = format!("{}{}", String::from_utf8_lossy(&earlier), std::fs::read_to_string(&full).unwrap_or_default());
         let missing: Vec<usize> = (0..RUNS).filter(|n| !both.contains(&format!("child r{round}-n{n} ran\n"))).collect();
         assert!(missing.is_empty(), "round {round}: no line from runs {missing:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// A secret argument (`--token <value>`, `--token=<value>`): its value is never written, in the
+/// command line, in any later line (the failing run's error included), in text or JSON, in the
+/// file or in the copy on standard error.
+fn a_secret_argument_is_never_logged() {
+    for json in ["0", "1"] {
+        let dir = temp_dir("secret");
+        let out = me("secret", &dir)
+            .args(["export", "--token", "s3cr3t-value", "--token=other-secret", "x"])
+            .env("CRAFT_LOG_JSON", json)
+            .env("CRAFT_LOG_STDERR", "1")
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1));
+        let log = std::fs::read_to_string(dir.join("app-cli.log")).unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        for (what, text) in [("log", log.as_str()), ("stderr", &*stderr)] {
+            assert!(!text.contains("s3cr3t-value") && !text.contains("other-secret"), "JSON {json}, {what}: {text}");
+            assert!(text.contains("export --token *** --token=*** x"), "JSON {json}, {what}: {text}");
+            assert!(text.contains("connecting with ***") && text.contains("the server refused ***"), "JSON {json}, {what}: {text}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

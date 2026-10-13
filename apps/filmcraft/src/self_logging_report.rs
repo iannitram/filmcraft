@@ -16,6 +16,9 @@ pub const PREVIOUS_LOG_FILE: &str = "filmcraft.1.log";
 pub const CLI_LOG_FILE: &str = "filmcraft-cli.log";
 /// Environment switches FilmCraft reads besides craft-log's own: its own and wgpu's backend choice.
 pub const SWITCH_PREFIXES: &[&str] = &["FILMCRAFT_", "WGPU_"];
+/// Switches whose values the report never shows: none today (no FILMCRAFT_ or WGPU_ variable
+/// carries a secret; craft-log also hides any whose name says TOKEN, SECRET, PASSWORD…).
+pub const SECRET_SWITCHES: &[&str] = &[];
 /// The window app's last line when it ends (`run ended: …`); the next start looks for it.
 pub const END_MARK: &str = "run ended:";
 /// How much of the end of the previous log is searched for [`END_MARK`].
