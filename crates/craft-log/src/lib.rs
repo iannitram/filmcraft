@@ -26,6 +26,7 @@ pub mod cli;
 pub mod collapse;
 pub mod filter;
 pub mod line;
+pub mod report;
 pub mod stall;
 pub mod testing;
 pub mod wrap;
