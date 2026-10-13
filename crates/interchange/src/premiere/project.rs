@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use filmcraft_media::MediaKind;
+use filmcraft_media::{Generator, MediaKind};
 use filmcraft_project::{BinId, ItemId, ItemKind, Label, SequenceSettings, TrackKind, Transition, TransitionAlign, TransitionId, find_effect};
 use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick};
 use roxmltree::Node;
@@ -32,6 +32,7 @@ pub fn import_project(bytes: &[u8], opts: &ImportOptions) -> Result<(Imported, R
         canvases: Vec::new(),
         shared_values: None,
         titles: HashMap::new(),
+        solids: HashSet::new(),
         shared_titles: None,
         report: &mut report,
     };
@@ -92,7 +93,9 @@ struct Importer<'a, 'i, 'o, 'r> {
     shared_values: Option<HashMap<&'a str, &'a str>>,
     /// The titles made in the Title Designer, by the source item each one is.
     titles: HashMap<ItemId, legacy_title::Title>,
-    /// Title values by their hash, gathered when the first title written by its hash is met.
+    /// The colour mattes and black video: generators here, with no time of their own.
+    solids: HashSet<ItemId>,
+    /// Title and matte values by their hash, gathered when the first one written by its hash is met.
     shared_titles: Option<HashMap<&'a str, &'a str>>,
     report: &'r mut Report,
 }
@@ -187,18 +190,33 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
         // file name would send Link Media looking for a file that never existed.
         if !path.trim().is_empty() && path.trim().bytes().all(|b| b.is_ascii_digit()) {
             let kind = child_text(media, "Title").filter(|t| !t.is_empty()).unwrap_or("generated media");
+            // what the generator keeps for itself: a matte's colour, a title's document
+            let root = self.graph.root;
+            let value = media.children().find(|n| n.has_tag_name(legacy_title::PREFS)).and_then(|prefs| {
+                prefs.text().filter(|text| !text.trim().is_empty()).or_else(|| {
+                    let shared = self.shared_titles.get_or_insert_with(|| text::shared_values(root, legacy_title::PREFS));
+                    prefs.attribute("BinaryHash").and_then(|hash| shared.get(hash).copied())
+                })
+            });
+            // a colour matte or black video is a generator here too: no file, and none needed
+            if let Some(generator) = solid(path.trim(), value) {
+                let mut spec = MediaSpec::default();
+                if let Some(video) = at(media, &["VideoStream"]) {
+                    let video = self.graph.resolve(video)?;
+                    let size = frame_size(video, (1920, 1080))?;
+                    let period = self.graph.integer(video, &["FrameRate"], TICKS_PER_SECOND / 24)?;
+                    spec.video = Some((size.0, size.1, rate(period).map(|(found, _)| found).unwrap_or(FrameRate::FPS_24)));
+                }
+                let id = self.builder.generator_media(&media_key, name, generator, &spec, bin);
+                self.solids.insert(id);
+                self.report.info("Premiere colour mattes and black video were imported as FilmCraft generators");
+                return Ok(id);
+            }
             let id = self.offline_source(&media_key, name, &shortened(kind, 120), bin);
             self.generated.insert(id);
             // a title made in the Title Designer carries its own document
-            if let Some(prefs) = media.children().find(|n| n.has_tag_name(legacy_title::PREFS)) {
-                let root = self.graph.root;
-                let value = prefs.text().filter(|text| !text.trim().is_empty()).or_else(|| {
-                    let shared = self.shared_titles.get_or_insert_with(|| text::shared_values(root, legacy_title::PREFS));
-                    prefs.attribute("BinaryHash").and_then(|hash| shared.get(hash).copied())
-                });
-                if let Some(title) = value.and_then(|value| legacy_title::read(value, self.report)).filter(|title| !title.is_empty()) {
-                    self.titles.insert(id, title);
-                }
+            if let Some(title) = value.and_then(|value| legacy_title::read(value, self.report)).filter(|title| !title.is_empty()) {
+                self.titles.insert(id, title);
             }
             return Ok(id);
         }
@@ -410,6 +428,20 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                         self.report
                             .info("Premiere text layers were imported as FilmCraft text layers; a font that is not installed here is replaced by a stand-in");
                     }
+                    if self.solids.contains(&source_item) {
+                        // A generator has no time of its own: the clip starts at its start (the
+                        // file has it an hour into a source without end), and every keyframe
+                        // moves with it. It has no sound either.
+                        let moved = imported.source_in;
+                        imported.source_in = Tick::ZERO;
+                        imported.speed = 1.0;
+                        for effect in &mut imported.effects {
+                            text::shift_keyframes(effect, moved);
+                        }
+                        if kind == TrackKind::Audio {
+                            imported.enabled = false;
+                        }
+                    }
                     clip_ids.insert(key(item), imported.id);
                     imported_track.items.push(imported);
                 }
@@ -523,6 +555,22 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
             },
             reverse: false,
         }))
+    }
+}
+
+/// The generator that a source made inside the application is, when FilmCraft has the same one.
+/// `code` is the number where the path belongs, a four-character code: `COLR` is a colour matte,
+/// whose `ImporterPrefs` value starts with its red, green and blue bytes (greys settle nothing
+/// about the order; red first is an assumption), and `BLAK` is black video.
+fn solid(code: &str, prefs: Option<&str>) -> Option<Generator> {
+    match &code.parse::<u32>().ok()?.to_be_bytes() {
+        b"COLR" => {
+            let bytes = text::decode_base64(prefs?)?;
+            let channel = |index: usize| bytes.get(index).map(|value| f32::from(*value) / 255.0);
+            Some(Generator::ColorMatte { color: [channel(0)?, channel(1)?, channel(2)?, 1.0] })
+        }
+        b"BLAK" => Some(Generator::BlackVideo),
+        _ => None,
     }
 }
 
