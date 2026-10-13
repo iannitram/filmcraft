@@ -32,6 +32,7 @@ macro_rules! out {
 
 mod args;
 mod probe;
+mod self_logging; // ours
 
 use args::{Args, parse_value};
 use filmcraft_automation::BridgeClient;
@@ -139,11 +140,13 @@ fn diag(msg: std::fmt::Arguments) {
 
 fn usage(msg: impl std::fmt::Display) -> ! {
     diag(format_args!("filmcraft-cli: {msg}\nRun `filmcraft-cli help` for usage."));
+    self_logging::failed(&msg); // ours
     std::process::exit(2)
 }
 
 fn fail(msg: impl std::fmt::Display) -> ! {
     diag(format_args!("filmcraft-cli: {msg}"));
+    self_logging::failed(&msg); // ours
     std::process::exit(1)
 }
 
@@ -273,6 +276,7 @@ fn absolute(path: &str) -> String {
 async fn main() {
     cli().await;
     if STDOUT_ERROR.load(Ordering::Relaxed) {
+        self_logging::failed(&"standard output could not be written"); // ours
         std::process::exit(1);
     }
 }
@@ -295,6 +299,7 @@ async fn cli() {
     // switch. It also leaves the OS media APIs unregistered: no hardware encoder is offered and no
     // encoder probe session is opened, so a run with it never touches the video hardware to decode
     // or encode (shared machines, comparing against the software decoders).
+    self_logging::install(a.opt("--data-dir")); // ours
     if a.flag("--no-hardware") || env_switch_on(std::env::var_os("FILMCRAFT_NO_HARDWARE").as_deref()) {
         filmcraft_codecs::hw::set_hardware_decoding(false);
     } else {
@@ -384,6 +389,7 @@ async fn cli() {
                         outln!("{}", json!({"line": n + 1, "id": id, "ok": false, "error": e}));
                         failed += 1;
                         if !a.flag("--keep-going") {
+                            self_logging::failed(&format!("batch line {}: {e}", n + 1)); // ours
                             std::process::exit(1);
                         }
                     }
@@ -391,6 +397,7 @@ async fn cli() {
             }
             b.finish(&a).await;
             if failed > 0 {
+                self_logging::failed(&format!("{failed} batch lines failed")); // ours
                 std::process::exit(1);
             }
         }

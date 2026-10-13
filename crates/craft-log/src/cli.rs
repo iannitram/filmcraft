@@ -170,6 +170,15 @@ fn args_masked() -> String {
         .join(" ")
 }
 
+/// A command is about to exit with an error: log `reason` at error (so the log holds why), then
+/// [`report_failure`].
+pub fn failed(app: &App, reason: &str) {
+    if installed().is_some() {
+        log::error!(target: app.name, "{reason}");
+    }
+    report_failure();
+}
+
 /// For a command that is about to exit with an error: flush, and print `log: <path>` as the last
 /// line on standard error, so whoever reads the failure knows where the reasons are. Prints
 /// nothing when no log file is open.
