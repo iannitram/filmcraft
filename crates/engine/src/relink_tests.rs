@@ -328,3 +328,80 @@ fn imported_premiere_media_is_missing_and_relinks_by_folder_mapping() {
     assert!(rows.iter().all(|m| m["name"] != "example.mov"), "{after}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Import `path`, then rewrite its record as a project saved on another machine holds it: at a
+/// path that is not here, never fingerprinted, with `edit` applied to what it says about the media.
+fn imported_then_recorded_elsewhere(s: &mut Session, path: &std::path::Path, edit: impl FnOnce(&mut filmcraft_media::MediaInfo)) -> ItemId {
+    let r = s.execute("file.import", json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let item = ItemId(r["items"][0].as_u64().unwrap());
+    let mut p = (*s.project).clone();
+    let m = p.item_mut(item).and_then(|i| i.as_media_mut()).unwrap();
+    let name = path.file_name().unwrap().to_string_lossy();
+    m.media = filmcraft_project::MediaRef::File { path: format!(r"D:\Show\Old Place\{name}") };
+    m.identity = None;
+    edit(&mut m.info);
+    s.project = std::sync::Arc::new(p);
+    item
+}
+
+/// A still has no length and no frame rate of its own, so a record of it made elsewhere (an
+/// imported project gives it a nominal hour at 24 fps) must not make its own file a mismatch.
+/// A picture of another size still is one.
+#[test]
+fn a_still_is_matched_by_its_size_not_by_duration_or_frame_rate() {
+    let root = tmp_dir("relink-still");
+    let png = root.join("cover.png");
+    image::RgbaImage::from_pixel(64, 36, image::Rgba([40, 120, 200, 255])).save(&png).unwrap();
+    let other = root.join("Other");
+    std::fs::create_dir_all(&other).unwrap();
+    image::RgbaImage::from_pixel(32, 32, image::Rgba([40, 120, 200, 255])).save(other.join("cover.png")).unwrap();
+
+    let mut s = Session::default();
+    let item = imported_then_recorded_elsewhere(&mut s, &png, |info| {
+        assert_eq!(info.kind, filmcraft_media::MediaKind::Still);
+        info.duration = filmcraft_time::Tick(3600 * filmcraft_time::TICKS_PER_SECOND);
+        let v = info.video.as_mut().unwrap();
+        v.frame_rate = if v.frame_rate == filmcraft_time::FrameRate::FPS_24 { filmcraft_time::FrameRate::FPS_25 } else { filmcraft_time::FrameRate::FPS_24 };
+    });
+    let e =
+        s.execute("media.relink", json!({"item": item.0, "path": other.join("cover.png").to_string_lossy(), "relinkOthers": false})).unwrap_err().to_string();
+    assert!(e.contains("image size differs (32×32 vs 64×36)"), "{e}");
+    assert!(!e.contains("duration") && !e.contains("video differs"), "only the size is compared: {e}");
+    let r = s.execute("media.relink", json!({"item": item.0, "path": png.to_string_lossy(), "relinkOthers": false})).unwrap();
+    assert_eq!(r["relinked"].as_array().unwrap().len(), 1, "{r}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Decoders and applications count the padding of an MP3 or AAC stream differently, so a record
+/// made elsewhere is a fraction of a second off for the very same file. Uncompressed sound has
+/// an exact length, and a real difference in length is still refused.
+#[test]
+fn compressed_sound_may_be_a_fraction_of_a_second_off_and_uncompressed_may_not() {
+    let root = tmp_dir("relink-sound");
+    let (m4a, wav) = (root.join("music.m4a"), root.join("voice.wav"));
+    make_movie(&m4a, DemoScene::Aurora, W, H, 48);
+    std::fs::write(&wav, crate::voiceover::write_wav_f32(&vec![0.0; 96_000], 48_000)).unwrap();
+    let off_by = |seconds: f64| move |info: &mut filmcraft_media::MediaInfo| info.duration += filmcraft_time::Tick::from_seconds_f64(seconds);
+    let relink = |s: &mut Session, item: ItemId, path: &std::path::Path| {
+        s.execute("media.relink", json!({"item": item.0, "path": path.to_string_lossy(), "relinkOthers": false}))
+    };
+
+    let mut s = Session::default();
+    let far = imported_then_recorded_elsewhere(&mut s, &m4a, off_by(0.8));
+    let info = &s.project.item(far).unwrap().as_media().unwrap().info;
+    assert_eq!(info.kind, filmcraft_media::MediaKind::AudioOnly, "{info:?}");
+    assert!(!info.audio().unwrap().codec.to_ascii_uppercase().contains("PCM"), "{info:?}");
+    let e = relink(&mut s, far, &m4a).unwrap_err().to_string();
+    assert!(e.contains("duration differs"), "0.8 s is another recording: {e}");
+
+    let mut s = Session::default();
+    let near = imported_then_recorded_elsewhere(&mut s, &m4a, off_by(0.2));
+    let r = relink(&mut s, near, &m4a).unwrap();
+    assert_eq!(r["relinked"].as_array().unwrap().len(), 1, "{r}");
+
+    let mut s = Session::default();
+    let pcm = imported_then_recorded_elsewhere(&mut s, &wav, off_by(0.2));
+    let e = relink(&mut s, pcm, &wav).unwrap_err().to_string();
+    assert!(e.contains("duration differs"), "uncompressed sound is exact: {e}");
+    let _ = std::fs::remove_dir_all(&root);
+}
