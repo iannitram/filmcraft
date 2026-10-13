@@ -108,15 +108,17 @@ impl Report {
         }
     }
 
-    /// Helper programs: ffmpeg (where it is on `PATH`, and its first version line).
+    /// Helper programs: ffmpeg (where it is on `PATH`, and its first version line). Waits for
+    /// `ffmpeg -version` (up to 3 s): for `<app>-cli diagnostics`. A window app uses
+    /// [`Report::add_helpers_later`] and [`log_helpers_in_background`] so its window never waits.
     pub fn add_helpers(&mut self) {
-        match find_on_path("ffmpeg") {
-            None => self.add("helpers", "ffmpeg", "not found on PATH"),
-            Some(p) => {
-                let version = first_line_of(&p, &["-version"], FFMPEG_TIMEOUT).unwrap_or_else(|why| format!("{UNKNOWN} ({why})"));
-                self.add("helpers", "ffmpeg", format!("{} ({version})", mask_home(&p.display().to_string())));
-            }
-        }
+        self.add("helpers", "ffmpeg", ffmpeg_helper(find_on_path("ffmpeg")));
+    }
+
+    /// The helpers' field for a report logged before they are probed: it points at the line
+    /// [`log_helpers_in_background`] writes when the answer arrives.
+    pub fn add_helpers_later(&mut self) {
+        self.add("helpers", "ffmpeg", "probed in the background: the \"report: [helpers] ffmpeg:\" line after this report");
     }
 
     /// Where the logs are: the folder, each named log (`("window log", path)`), and the newest
@@ -174,6 +176,38 @@ impl Report {
             log::info!(target: target, "report: [{}] {}: {}", f.section, f.key, f.value);
         }
     }
+}
+
+/// The ffmpeg helper's value: where `found` is (home masked) and its first version line, or why
+/// not.
+pub fn ffmpeg_helper(found: Option<PathBuf>) -> String {
+    match found {
+        None => "not found on PATH".to_owned(),
+        Some(p) => {
+            let version = first_line_of(&p, &["-version"], FFMPEG_TIMEOUT).unwrap_or_else(|why| format!("{UNKNOWN} ({why})"));
+            format!("{} ({version})", mask_home(&p.display().to_string()))
+        }
+    }
+}
+
+/// Probe the helpers on a background thread and log `report: [helpers] ffmpeg: …` at info under
+/// `target` when the answer arrives (after [`Report::log`], so it follows the report). For a
+/// window app, whose window must not wait for `ffmpeg -version`. The handle gives the value
+/// (tests); `None` when no thread could be started (nothing is logged then).
+pub fn log_helpers_in_background(target: &'static str) -> Option<std::thread::JoinHandle<String>> {
+    probe_in_background(target, || ffmpeg_helper(find_on_path("ffmpeg")))
+}
+
+/// [`log_helpers_in_background`] with the probe given.
+pub fn probe_in_background(target: &'static str, probe: impl FnOnce() -> String + Send + 'static) -> Option<std::thread::JoinHandle<String>> {
+    std::thread::Builder::new()
+        .name("craft-helpers".into())
+        .spawn(move || {
+            let value = probe();
+            log::info!(target: target, "report: [helpers] ffmpeg: {value}");
+            value
+        })
+        .ok()
 }
 
 fn read(path: &str) -> Option<String> {
@@ -336,9 +370,19 @@ pub fn find_on_path(program: &str) -> Option<PathBuf> {
     std::env::split_paths(&path).flat_map(|d| names.iter().map(move |n| d.join(n))).find(|p| p.is_file())
 }
 
-/// Run `program args` and return the first line it printed, killing it after `timeout`.
+/// Run `program args` and return the first line it printed, killing it after `timeout`. On
+/// Windows it runs without a console window (`CREATE_NO_WINDOW`), so a window app that asks
+/// flashes none.
 pub fn first_line_of(program: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
-    let mut child = Command::new(program).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().map_err(|e| e.to_string())?;
+    let mut command = Command::new(program);
+    command.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = command.spawn().map_err(|e| e.to_string())?;
     let start = Instant::now();
     loop {
         match child.try_wait() {
@@ -571,6 +615,35 @@ mod tests {
         std::thread::spawn(move || tx.send(last_line_with(&fifo, "x", 10)));
         let got = rx.recv_timeout(Duration::from_secs(5));
         assert_eq!(got, Ok(None), "reading the previous run's end waited on a FIFO");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_helpers_are_probed_without_waiting() {
+        if !cfg!(unix) {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("craft-log-report-helpers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // an ffmpeg that takes a second to answer, as a cold disk or a virus scanner makes it
+        let slow = dir.join("ffmpeg");
+        std::fs::write(&slow, "#!/bin/sh\nsleep 1\necho \"ffmpeg version 9.9-test\"\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let t0 = Instant::now();
+        let probe = probe_in_background("report-test", move || ffmpeg_helper(Some(slow))).unwrap();
+        assert!(t0.elapsed() < Duration::from_millis(300), "the caller waited {:?}", t0.elapsed());
+        let value = probe.join().unwrap();
+        assert!(value.ends_with("(ffmpeg version 9.9-test)"), "{value}");
+        assert!(t0.elapsed() >= Duration::from_secs(1));
+        let mut r = Report::empty();
+        r.add_helpers_later();
+        assert!(r.get("helpers", "ffmpeg").is_some_and(|v| v.contains("background")));
+        assert_eq!(ffmpeg_helper(None), "not found on PATH");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
