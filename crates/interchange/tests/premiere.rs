@@ -836,13 +836,18 @@ fn premiere_text_of_a_graphic_becomes_a_text_layer() {
 /// left alone: the clip stays on the timeline switched off and the report names the component.
 #[test]
 fn premiere_text_that_cannot_be_read_leaves_the_graphic_switched_off() {
+    // the marker of the binary form with nothing readable behind it, and one whose length is off by the marker
     let mut binary = vec![0x20, 0x01, 0, 0, 0, 0, 0, 0, 0x44, 0x33, 0x22, 0x11];
-    binary.extend([0u8; 0x11c]);
+    binary.extend([0u8; 0x120]);
+    let mut counted_with_marker = source_text_binary();
+    let length = u32::from_le_bytes(counted_with_marker[..4].try_into().unwrap()) + 4;
+    counted_with_marker[..4].copy_from_slice(&length.to_le_bytes());
     let json = source_text_json(TITLE_JSON);
     let mut wrong_length = json.clone();
     wrong_length[0] ^= 1;
     for (what, value) in [
         ("binary", binary),
+        ("binary, length counts the marker", counted_with_marker),
         ("empty", Vec::new()),
         ("cut short", json[..json.len() / 2].to_vec()),
         ("wrong length", wrong_length),
@@ -1021,7 +1026,8 @@ fn source_text_binary() -> Vec<u8> {
     let mut tables = vec![0u8; 4];
     let root = put_table(&mut tables, &[Table(text)]);
     tables[..4].copy_from_slice(&(root as u32).to_le_bytes());
-    let mut bytes = ((tables.len() + 4) as u32).to_le_bytes().to_vec();
+    // the length in the header counts the tables, not the marker in front of them
+    let mut bytes = (tables.len() as u32).to_le_bytes().to_vec();
     bytes.extend([0u8; 4]);
     bytes.extend([0x44, 0x33, 0x22, 0x11]);
     bytes.extend(tables);
@@ -1073,9 +1079,9 @@ fn premiere_text_in_the_binary_form_becomes_a_text_layer() {
 fn premiere_text_in_a_damaged_binary_form_never_panics() {
     let good = source_text_binary();
     let fix_length = |mut bytes: Vec<u8>| {
-        if bytes.len() >= 8 {
-            let body = (bytes.len() - 8) as u32;
-            bytes[..4].copy_from_slice(&body.to_le_bytes());
+        if bytes.len() >= 12 {
+            let tables = (bytes.len() - 12) as u32;
+            bytes[..4].copy_from_slice(&tables.to_le_bytes());
         }
         bytes
     };
