@@ -158,6 +158,22 @@ struct Out {
     written: u64,
     /// The cap was reached and said so: only error lines from here.
     capped: bool,
+    /// The file did not end in a newline (a run cut off mid-line): the first write starts with one.
+    newline_first: bool,
+}
+
+/// Whether the file at `path` is not empty and does not end in a newline.
+fn ends_mid_line(path: &Path) -> bool {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let mut options = OpenOptions::new();
+    options.read(true);
+    nonblocking(&mut options);
+    let Ok(mut f) = options.open(path) else { return false };
+    if !f.metadata().is_ok_and(|m| m.is_file() && m.len() > 0) || f.seek(SeekFrom::End(-1)).is_err() {
+        return false;
+    }
+    let mut last = [0u8; 1];
+    f.read_exact(&mut last).is_ok() && last[0] != b'\n'
 }
 
 /// The installed command-line logger.
@@ -177,7 +193,9 @@ impl CliLogger {
             Some((p, f, w)) => (Some(p), Some(f), w),
             None => (None, None, 0),
         };
-        CliLogger { filter, json, stderr, path, out: Mutex::new(Out { file, written, capped: false }), collapse: Mutex::new(Collapser::default()) }
+        let newline_first = path.as_deref().is_some_and(ends_mid_line);
+        let out = Out { file, written, capped: false, newline_first };
+        CliLogger { filter, json, stderr, path, out: Mutex::new(out), collapse: Mutex::new(Collapser::default()) }
     }
 
     /// The log file, when there is one.
@@ -195,9 +213,10 @@ impl CliLogger {
             let _ = std::io::stderr().write_all(formatted.as_bytes());
         }
         let mut out = self.out.lock().unwrap_or_else(PoisonError::into_inner);
+        let formatted = if std::mem::take(&mut out.newline_first) { format!("\n{formatted}") } else { formatted };
         let len = u64::try_from(formatted.len()).unwrap_or(u64::MAX);
         let end = out.written.saturating_add(len);
-        let Out { file, written, capped } = &mut *out;
+        let Out { file, written, capped, .. } = &mut *out;
         let Some(f) = file.as_mut() else { return };
         if end > MAX_FILE_BYTES {
             // capped: say so once, then write only errors (the reason a command failed must be in
@@ -418,6 +437,28 @@ mod tests {
         assert!(t0.elapsed() >= LOCK_WAIT);
         drop(held);
         assert!(!lock.exists(), "released");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_run_starts_on_a_new_line_after_a_cut_off_one() {
+        let dir = temp_dir("newline");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("app-cli.log"), "a line cut off by a run that died").unwrap();
+        let l = logger_in(&dir, false);
+        rec(&l, log::Level::Warn, "app", "first");
+        rec(&l, log::Level::Warn, "app", "second");
+        l.flush();
+        let text = std::fs::read_to_string(dir.join("app-cli.log")).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3, "{text:?}");
+        assert_eq!(lines[0], "a line cut off by a run that died");
+        assert!(lines[1].ends_with("app: first") && lines[2].ends_with("app: second"), "{text:?}");
+        // a file ending in a newline gets none extra
+        let l = logger_in(&dir, false);
+        rec(&l, log::Level::Warn, "app", "third");
+        l.flush();
+        assert_eq!(std::fs::read_to_string(dir.join("app-cli.log")).unwrap().lines().count(), 4);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
