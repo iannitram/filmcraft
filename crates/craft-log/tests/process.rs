@@ -20,6 +20,7 @@ fn main() {
         ("a_failing_command_with_standard_error_full_exits_1", a_failing_command_with_standard_error_full_exits_1),
         ("a_failing_test_capture_with_standard_error_full_does_not_abort", a_failing_test_capture_with_standard_error_full_does_not_abort),
         ("a_fifo_in_place_of_the_log_does_not_hang", a_fifo_in_place_of_the_log_does_not_hang),
+        ("many_runs_at_once_on_a_full_log_lose_nothing", many_runs_at_once_on_a_full_log_lose_nothing),
     ];
     let filter = std::env::args().skip(1).find(|a| !a.starts_with('-'));
     let mut failed = Vec::new();
@@ -44,8 +45,9 @@ fn child(role: &str) {
     let dir = std::env::var_os("CRAFT_LOG_TEST_DIR").map(PathBuf::from);
     match role {
         "run" => {
+            wait_for_start();
             let _ = craft_log::cli::install(&APP, dir.as_deref());
-            log::warn!(target: "app", "child ran");
+            log::warn!(target: "app", "child {} ran", std::env::var("CRAFT_LOG_TEST_TAG").unwrap_or_default());
             log::logger().flush();
         }
         "fail" => {
@@ -63,6 +65,16 @@ fn child(role: &str) {
             assert!(r.is_err());
         }
         other => panic!("unknown role {other}"),
+    }
+}
+
+/// Many runs started one after another start milliseconds apart; `CRAFT_LOG_TEST_START_AT`
+/// (milliseconds since 1970) has them all begin at the same moment.
+fn wait_for_start() {
+    let Some(at) = std::env::var("CRAFT_LOG_TEST_START_AT").ok().and_then(|v| v.parse::<u64>().ok()) else { return };
+    let at = std::time::UNIX_EPOCH + Duration::from_millis(at);
+    if let Ok(d) = at.duration_since(std::time::SystemTime::now()) {
+        std::thread::sleep(d);
     }
 }
 
@@ -149,3 +161,36 @@ fn a_fifo_in_place_of_the_log_does_not_hang() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Fault 5: 48 runs at once on a full log. The roll-over raced: a 16 MiB earlier file was replaced
+/// by a 309-byte one, and lines written into a file that was then moved and replaced were lost.
+/// Every run's line must land in the log or the earlier file, and the earlier file must still be
+/// the full one.
+fn many_runs_at_once_on_a_full_log_lose_nothing() {
+    const RUNS: usize = 48;
+    for round in 0..5 {
+        let dir = temp_dir("concurrent");
+        let full = dir.join("app-cli.log");
+        let line = format!("{}\n", "x".repeat(99));
+        let mut body = String::with_capacity(craft_log::cli::MAX_FILE_BYTES as usize);
+        while (body.len() as u64) < craft_log::cli::MAX_FILE_BYTES {
+            body.push_str(&line);
+        }
+        body.push_str("the last line of the full log\n");
+        std::fs::write(&full, &body).unwrap();
+        let full_len = body.len() as u64;
+        let start = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap() + Duration::from_millis(1500);
+        let start = start.as_millis().to_string();
+        let children: Vec<_> =
+            (0..RUNS).map(|n| me("run", &dir).env("CRAFT_LOG_TEST_TAG", format!("r{round}-n{n}")).env("CRAFT_LOG_TEST_START_AT", &start).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap()).collect();
+        for mut c in children {
+            assert_eq!(wait_at_most(&mut c, Duration::from_secs(30)).and_then(|s| s.code()), Some(0));
+        }
+        let earlier = std::fs::read(dir.join("app-cli.1.log")).unwrap_or_default();
+        assert!(earlier.len() as u64 >= full_len, "round {round}: the earlier file was replaced: {} bytes, was {full_len}", earlier.len());
+        assert!(String::from_utf8_lossy(&earlier).contains("the last line of the full log"), "round {round}: the full log is gone");
+        let both = format!("{}{}", String::from_utf8_lossy(&earlier), std::fs::read_to_string(&full).unwrap_or_default());
+        let missing: Vec<usize> = (0..RUNS).filter(|n| !both.contains(&format!("child r{round}-n{n} ran\n"))).collect();
+        assert!(missing.is_empty(), "round {round}: no line from runs {missing:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
