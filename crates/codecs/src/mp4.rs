@@ -764,7 +764,8 @@ fn start_edit_at_first_picture(file: &mut Mp4File, vtrack: Option<usize>) {
 /// what cures a 1 ms track clock, does nothing here: the stamps were rounded on a coarser one.
 ///
 /// The unit is the largest that divides every stamp. A file with exact stamps has its whole frame
-/// as that unit (or 1) and is left alone: only a unit of a quarter frame or less counts.
+/// as that unit (or 1) and is left alone: only a unit of an eighth of the shortest frame or less
+/// counts, so a request is never moved by more than a sixteenth of a frame.
 fn stamp_grid(t: &filmcraft_isobmff::Track) -> i64 {
     let mut unit = 0u64;
     let mut shortest = u64::MAX;
@@ -782,7 +783,7 @@ fn stamp_grid(t: &filmcraft_isobmff::Track) -> i64 {
         }
     }
     match i64::try_from(unit) {
-        Ok(unit) if unit > 1 && shortest != u64::MAX && unit.unsigned_abs().saturating_mul(4) <= shortest => unit,
+        Ok(unit) if unit > 1 && shortest != u64::MAX && unit.unsigned_abs().saturating_mul(8) <= shortest => unit,
         _ => 1,
     }
 }
