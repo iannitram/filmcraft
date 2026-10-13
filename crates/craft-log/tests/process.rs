@@ -4,8 +4,9 @@
 //! (`CRAFT_LOG_TEST_CHILD=<role>`), each with what the case needs, and checks how they end.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 const APP: craft_log::App = craft_log::App { name: "app", version: "1.0.0", ours: "app", default_filter: "warn,app=info" };
 
@@ -18,6 +19,7 @@ fn main() {
         ("a_non_unicode_argument_is_logged_not_a_panic", a_non_unicode_argument_is_logged_not_a_panic),
         ("a_failing_command_with_standard_error_full_exits_1", a_failing_command_with_standard_error_full_exits_1),
         ("a_failing_test_capture_with_standard_error_full_does_not_abort", a_failing_test_capture_with_standard_error_full_does_not_abort),
+        ("a_fifo_in_place_of_the_log_does_not_hang", a_fifo_in_place_of_the_log_does_not_hang),
     ];
     let filter = std::env::args().skip(1).find(|a| !a.starts_with('-'));
     let mut failed = Vec::new();
@@ -78,6 +80,22 @@ fn me(role: &str, dir: &Path) -> Command {
     c
 }
 
+/// Wait for `child` at most `limit`; kill it and return `None` when it does not end.
+fn wait_at_most(child: &mut std::process::Child, limit: Duration) -> Option<ExitStatus> {
+    let t0 = Instant::now();
+    loop {
+        if let Some(s) = child.try_wait().unwrap() {
+            return Some(s);
+        }
+        if t0.elapsed() > limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// Fault 1: `std::env::args()` panics on an argument that is not Unicode (a Latin-1 file name on
 /// Linux), which turned a usage error (exit 2) into a crash (exit 101).
 fn a_non_unicode_argument_is_logged_not_a_panic() {
@@ -113,6 +131,21 @@ fn a_failing_test_capture_with_standard_error_full_does_not_abort() {
     let dir = temp_dir("capture");
     let status = me("capture-panic", &dir).stdout(Stdio::null()).stderr(full).status().unwrap();
     assert_eq!(status.code(), Some(0), "{status}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Fault 3: opening a FIFO for writing waits for a reader, so a FIFO in place of the log file
+/// hung every command. The log is never waited for.
+fn a_fifo_in_place_of_the_log_does_not_hang() {
+    let dir = temp_dir("fifo");
+    let fifo = dir.join("app-cli.log");
+    match Command::new("mkfifo").arg(&fifo).status() {
+        Ok(s) if s.success() => {}
+        _ => return, // no mkfifo (Windows): nothing to check
+    }
+    let mut child = me("run", &dir).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
+    let status = wait_at_most(&mut child, Duration::from_secs(10));
+    assert_eq!(status.and_then(|s| s.code()), Some(0), "the run hung on the FIFO (killed after 10 s) or failed: {status:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
