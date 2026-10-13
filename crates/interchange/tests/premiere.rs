@@ -709,3 +709,387 @@ fn premiere_points_written_as_two_fields_by_older_versions_are_read() {
     assert_eq!(position.vec2_at(Tick(5 * TPS)), Vec2::new(480.0, 810.0));
     assert_eq!(position.vec2_at(Tick(7 * TPS)), Vec2::new(1440.0, 270.0));
 }
+
+/// Standard base64, for building a Source Text value.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let n = u32::from(chunk[0]) << 16 | u32::from(*chunk.get(1).unwrap_or(&0)) << 8 | u32::from(*chunk.get(2).unwrap_or(&0));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// `project_xml` with its media made a graphic of the application's own (a number where the path
+/// belongs) and one Text component on the video clip, holding `source_text` as its Source Text.
+fn project_with_text_layer(source_text: &[u8]) -> String {
+    let text = format!(
+        concat!(
+            "<VideoFilterComponent ObjectID=\"80\"><MatchName>AE.ADBE Text</MatchName><Component><Params>",
+            "<Param Index=\"0\" ObjectRef=\"81\"/><Param Index=\"1\" ObjectRef=\"82\"/><Param Index=\"2\" ObjectRef=\"83\"/><Param Index=\"3\" ObjectRef=\"84\"/>",
+            "</Params></Component></VideoFilterComponent>",
+            "<ArbVideoComponentParam ObjectID=\"81\"><Name>Source Text</Name><IsTimeVarying>false</IsTimeVarying>",
+            "<StartKeyframeValue Encoding=\"base64\">{value}</StartKeyframeValue><ParameterID>1</ParameterID></ArbVideoComponentParam>",
+            "<PointComponentParam ObjectID=\"82\"><ParameterID>3</ParameterID><StartKeyframe>-91445760000000000,0.25:0.5,0,0,0,0,0,0</StartKeyframe></PointComponentParam>",
+            "<VideoComponentParam ObjectID=\"83\"><ParameterID>4</ParameterID><StartKeyframe>-91445760000000000,50.,0,0,0,0,0,0</StartKeyframe></VideoComponentParam>",
+            "<VideoComponentParam ObjectID=\"84\"><ParameterID>8</ParameterID><StartKeyframe>-91445760000000000,80.,0,0,0,0,0,0</StartKeyframe></VideoComponentParam>"
+        ),
+        value = base64(source_text)
+    );
+    let xml = project_xml()
+        .replace(
+            "<Media ObjectUID=\"movie\"><FilePath>/media/example.mov</FilePath>",
+            "<Media ObjectUID=\"movie\"><FilePath>1196574294</FilePath><Title>Graphic</Title><Infinite>true</Infinite>",
+        )
+        .replace(
+            "<Component Index=\"0\" ObjectRef=\"64\"/></Components>",
+            "<Component Index=\"0\" ObjectRef=\"64\"/><Component Index=\"1\" ObjectRef=\"80\"/></Components>",
+        )
+        .replace("</PremiereData>", &format!("{text}</PremiereData>"));
+    assert_eq!(xml.matches("AE.ADBE Text").count(), 1);
+    assert!(xml.contains("1196574294"));
+    xml
+}
+
+/// A Source Text value as project versions 34 to 38 write it: the byte length, four zero bytes,
+/// then the JSON in UTF-16LE.
+fn source_text_json(json: &str) -> Vec<u8> {
+    let body: Vec<u8> = json.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let mut bytes = (body.len() as u32).to_le_bytes().to_vec();
+    bytes.extend([0u8; 4]);
+    bytes.extend(body);
+    bytes
+}
+
+const TITLE_JSON: &str = r#"{"mTextParam":{"mAlignment":1,"mLeading":0,"mLigatures":false,"mIsVerticalText":false,"mWidth":0,"mHeight":0,
+ "mShadowVisible":true,"mShadowColor":4144959,"mShadowOpacity":75.5,"mShadowAngle":135,"mShadowOffset":7,"mShadowSize":0,"mShadowBlur":40,
+ "mStyleSheet":{"mText":"A synthetic title","mFontName":{"mParamValues":[[0,"ExampleSans-Bold"]]},"mFontSize":{"mParamValues":[[0,77.5]]},
+  "mFillColor":{"mParamValues":[[0,16711680]]},"mFillVisible":{"mParamValues":[[0,true]]},
+  "mStrokeVisible":{"mParamValues":[[0,true]]},"mStrokeWidth":{"mParamValues":[[0,4]]},"mStrokeColor":{"mParamValues":[[0,0]]},
+  "mTracking":{"mParamValues":[[0,20]]},"mFauxBold":{"mParamValues":[[0,true]]},"mCapsOption":{"mParamValues":[[0,1]]}}},"mVersion":1}"#;
+
+/// A title typed in the application is a graphic clip with a text layer here: the words, the
+/// font, the size, the colours and the layer's place come across, the clip is switched on and
+/// starts at its canvas's own start.
+#[test]
+fn premiere_text_of_a_graphic_becomes_a_text_layer() {
+    use filmcraft_project::ParamValue;
+    let xml = project_with_text_layer(&source_text_json(TITLE_JSON));
+    let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+    let said = report.to_string();
+    assert!(said.contains("imported as FilmCraft text layers"), "{said}");
+    assert!(!said.contains("AE.ADBE Text"), "the text component was read, not skipped: {said}");
+    let sequence = imported.project.sequence(imported.sequences[0]).unwrap();
+    let video = &sequence.video_tracks[0].items[0];
+    assert!(video.enabled, "a graphic whose text was read is shown");
+    assert!(
+        matches!(imported.project.item(video.item).unwrap().kind, ItemKind::Graphic { width: 1920, height: 1080, .. }),
+        "its source is a canvas of the sequence frame: {:?}",
+        imported.project.item(video.item).unwrap().kind
+    );
+    assert_eq!((video.start, video.duration, video.source_in, video.speed), (Tick::ZERO, Tick(2 * TPS), Tick::ZERO, 1.0));
+    // the clip's own Motion keyframes moved with the clip's start (they were at 5 s and 7 s of the source)
+    let scale = video.effect("motion").unwrap().param("scale").unwrap();
+    assert_eq!(scale.keyframes.iter().map(|k| k.time).collect::<Vec<_>>(), [Tick::ZERO, Tick(2 * TPS)]);
+
+    let layers: Vec<_> = video.graphic_layers().collect();
+    assert_eq!(layers.len(), 1);
+    let layer = layers[0];
+    let text = |id: &str| match &layer.param(id).unwrap().value {
+        ParamValue::Text(s) => s.clone(),
+        other => panic!("{id}: {other:?}"),
+    };
+    assert_eq!((text("text").as_str(), text("font").as_str(), text("font_style").as_str()), ("A synthetic title", "Example Sans", "Bold"));
+    assert_eq!(layer.f64_at("size", Tick::ZERO), 77.5);
+    assert_eq!(layer.f64_at("tracking", Tick::ZERO), 20.0);
+    assert!(matches!(layer.param("align").unwrap().value, ParamValue::Choice(1)), "centred");
+    assert!(matches!(layer.param("caps").unwrap().value, ParamValue::Choice(1)), "all caps");
+    assert!(matches!(layer.param("faux_bold").unwrap().value, ParamValue::Bool(true)));
+    assert!(matches!(layer.param("fill_color").unwrap().value, ParamValue::Color(c) if c == [1.0, 0.0, 0.0, 1.0]), "{:?}", layer.param("fill_color"));
+    assert!(matches!(layer.param("stroke").unwrap().value, ParamValue::Bool(true)));
+    assert_eq!(layer.f64_at("stroke_width", Tick::ZERO), 4.0);
+    assert!(matches!(layer.param("stroke_color").unwrap().value, ParamValue::Color(c) if c == [0.0, 0.0, 0.0, 1.0]));
+    assert!(matches!(layer.param("shadow").unwrap().value, ParamValue::Bool(true)));
+    assert_eq!(
+        (layer.f64_at("shadow_opacity", Tick::ZERO), layer.f64_at("shadow_distance", Tick::ZERO), layer.f64_at("shadow_blur", Tick::ZERO)),
+        (75.5, 7.0, 40.0)
+    );
+    // the layer's own place: a quarter across and half-way down the 1920x1080 frame, half size, 80 %
+    assert_eq!(layer.vec2_at("position", Tick::ZERO), Vec2::new(480.0, 540.0));
+    assert_eq!((layer.f64_at("scale", Tick::ZERO), layer.f64_at("opacity", Tick::ZERO)), (50.0, 80.0));
+    // and it is a layer the renderer can evaluate
+    let spec = filmcraft_project::graphic::eval_layer(layer, Tick::ZERO, (1920, 1080)).expect("a text layer");
+    assert!(matches!(&spec.content, filmcraft_project::graphic::LayerContent::Text(t) if t.text == "A synthetic title" && t.size == 77.5));
+
+    // the sound of the same source has nothing to play: it stays as it was, switched off
+    assert!(!sequence.audio_tracks[0].items[0].enabled);
+}
+
+/// Source Text that is not the JSON form (newer versions write a binary one), or is damaged, is
+/// left alone: the clip stays on the timeline switched off and the report names the component.
+#[test]
+fn premiere_text_that_cannot_be_read_leaves_the_graphic_switched_off() {
+    let mut binary = vec![0x20, 0x01, 0, 0, 0, 0, 0, 0, 0x44, 0x33, 0x22, 0x11];
+    binary.extend([0u8; 0x11c]);
+    let json = source_text_json(TITLE_JSON);
+    let mut wrong_length = json.clone();
+    wrong_length[0] ^= 1;
+    for (what, value) in [
+        ("binary", binary),
+        ("empty", Vec::new()),
+        ("cut short", json[..json.len() / 2].to_vec()),
+        ("wrong length", wrong_length),
+        ("no text in it", source_text_json(r#"{"mTextParam":{"mStyleSheet":{}}}"#)),
+        ("not an object", source_text_json("[1,2,3]")),
+    ] {
+        let xml = project_with_text_layer(&value);
+        let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap_or_else(|e| panic!("{what}: {e}"));
+        let said = report.to_string();
+        assert!(said.contains("(AE.ADBE Text) is not supported and was skipped"), "{what}: {said}");
+        assert!(said.contains("kept on the timeline switched off"), "{what}: {said}");
+        let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+        assert!(!video.enabled, "{what}");
+        assert_eq!(video.graphic_layers().count(), 0, "{what}");
+        assert!(imported.project.item(video.item).unwrap().as_media().is_some(), "{what}: still the placeholder");
+    }
+    // text that is not valid base64 at all
+    let xml = project_with_text_layer(b"x").replace(
+        "<StartKeyframeValue Encoding=\"base64\">eA==</StartKeyframeValue>",
+        "<StartKeyframeValue Encoding=\"base64\">*** not base64 ***</StartKeyframeValue>",
+    );
+    assert!(xml.contains("not base64"));
+    let (imported, _) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+    assert!(!imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0].enabled);
+}
+
+/// Vector Motion, the transform of a whole graphic, has Motion's controls: it becomes the
+/// Transform effect, which moves the composed graphic before the clip's own Motion does.
+#[test]
+fn premiere_vector_motion_becomes_a_transform_effect() {
+    let xml = project_with_effect("AE.ADBE Graphic Group", &[(2, "76."), (3, "100."), (4, "true"), (5, "15.")]).replace(
+        "</PremiereData>",
+        concat!(
+            "<PointComponentParam ObjectID=\"90\"><ParameterID>1</ParameterID><StartKeyframe>-91445760000000000,0.75:0.5,0,0,0,0,0,0</StartKeyframe></PointComponentParam>",
+            "<PointComponentParam ObjectID=\"91\"><ParameterID>6</ParameterID><StartKeyframe>-91445760000000000,0.5:0.5,0,0,0,0,0,0</StartKeyframe></PointComponentParam>",
+            "</PremiereData>"
+        ),
+    );
+    let xml = xml.replace(
+        "<Params><Param Index=\"0\" ObjectRef=\"81\"/>",
+        "<Params><Param Index=\"4\" ObjectRef=\"90\"/><Param Index=\"5\" ObjectRef=\"91\"/><Param Index=\"0\" ObjectRef=\"81\"/>",
+    );
+    assert!(xml.contains("ObjectRef=\"90\""));
+    let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+    assert!(!report.has_warnings(), "{report}");
+    let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+    let transform = video.effect("transform").expect("Vector Motion was dropped");
+    assert_eq!(transform.vec2_at("position", Tick::ZERO), Vec2::new(1440.0, 540.0));
+    assert_eq!(transform.vec2_at("anchor", Tick::ZERO), Vec2::new(960.0, 540.0));
+    assert_eq!(
+        (transform.f64_at("scale_height", Tick::ZERO), transform.f64_at("scale_width", Tick::ZERO), transform.f64_at("rotation", Tick::ZERO)),
+        (76.0, 100.0, 15.0)
+    );
+    assert!(matches!(transform.param("uniform_scale").unwrap().value, filmcraft_project::ParamValue::Bool(true)));
+    assert!(video.effect("motion").is_some());
+}
+
+/// A file writes each distinct Source Text in full once. The same text on a later clip is an
+/// empty element that names the first by its hash.
+#[test]
+fn premiere_text_written_once_is_found_by_its_hash() {
+    let full = project_with_text_layer(&source_text_json(TITLE_JSON));
+    let value = base64(&source_text_json(TITLE_JSON));
+    let xml = full.replace(&format!("<StartKeyframeValue Encoding=\"base64\">{value}</StartKeyframeValue>"), "<StartKeyframeValue Encoding=\"base64\" BinaryHash=\"example-hash\"/>").replace(
+        "</PremiereData>",
+        &format!(
+            "<ArbVideoComponentParam ObjectID=\"95\"><StartKeyframeValue Encoding=\"base64\" BinaryHash=\"example-hash\">{value}</StartKeyframeValue></ArbVideoComponentParam></PremiereData>"
+        ),
+    );
+    assert_eq!(xml.matches("example-hash").count(), 2);
+    let (imported, _) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+    let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+    assert!(video.enabled);
+    assert_eq!(video.graphic_layers().count(), 1);
+
+    // a hash that nothing in the file carries the value of: there is no text to read
+    let lost = xml.replace("BinaryHash=\"example-hash\">", "BinaryHash=\"another-hash\">");
+    assert_ne!(lost, xml);
+    let (imported, _) = premiere::import_project(lost.as_bytes(), &ImportOptions::default()).unwrap();
+    assert!(!imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0].enabled);
+}
+
+/// One field of a hand-written table-and-offset buffer (the binary form of Source Text).
+enum Field {
+    Absent,
+    Byte(u8),
+    Number(u32),
+    Float(f32),
+    Words(&'static str),
+    Table(Vec<Field>),
+    List(Vec<Field>),
+}
+
+/// Writes a table (its field-offset list, then its fields, then what they point to) and returns
+/// where the table starts.
+fn put_table(out: &mut Vec<u8>, fields: &[Field]) -> usize {
+    let list = out.len();
+    let mut next = 4u16;
+    let offsets: Vec<u16> = fields
+        .iter()
+        .map(|f| {
+            if matches!(f, Field::Absent) {
+                0
+            } else {
+                next += 4;
+                next - 4
+            }
+        })
+        .collect();
+    out.extend(((4 + 2 * fields.len()) as u16).to_le_bytes());
+    out.extend(next.to_le_bytes());
+    for offset in &offsets {
+        out.extend(offset.to_le_bytes());
+    }
+    let table = out.len();
+    out.extend(((table - list) as i32).to_le_bytes());
+    let mut pointers = Vec::new();
+    for field in fields {
+        match field {
+            Field::Absent => {}
+            Field::Byte(v) => out.extend([*v, 0, 0, 0]),
+            Field::Number(v) => out.extend(v.to_le_bytes()),
+            Field::Float(v) => out.extend(v.to_le_bytes()),
+            other => {
+                pointers.push((out.len(), other));
+                out.extend([0; 4]);
+            }
+        }
+    }
+    for (at, field) in pointers {
+        let target = put_value(out, field);
+        out[at..at + 4].copy_from_slice(&((target - at) as u32).to_le_bytes());
+    }
+    table
+}
+
+fn put_value(out: &mut Vec<u8>, field: &Field) -> usize {
+    match field {
+        Field::Words(text) => {
+            let at = out.len();
+            out.extend((text.len() as u32).to_le_bytes());
+            out.extend(text.as_bytes());
+            out.push(0);
+            at
+        }
+        Field::Table(fields) => put_table(out, fields),
+        Field::List(items) => {
+            let at = out.len();
+            out.extend((items.len() as u32).to_le_bytes());
+            let slots = out.len();
+            out.resize(slots + 4 * items.len(), 0);
+            for (i, item) in items.iter().enumerate() {
+                let slot = slots + 4 * i;
+                let target = put_value(out, item);
+                out[slot..slot + 4].copy_from_slice(&((target - slot) as u32).to_le_bytes());
+            }
+            at
+        }
+        _ => panic!("not something a field points to"),
+    }
+}
+
+/// A Source Text value as project versions 40 to 43 write it: the byte length, four zero bytes,
+/// the marker, then the tables. Two runs ("Two " and "fonts"), two fonts, the second run smaller.
+fn source_text_binary() -> Vec<u8> {
+    use Field::*;
+    let black = || Table(vec![Byte(0), Byte(0), Byte(0)]);
+    let style = |size: f32| Table(vec![Number(1), Float(size), Table(vec![Byte(236), Byte(246)]), Absent, black(), Byte(1), Float(4.0)]);
+    let mut text = vec![
+        List(vec![Table(vec![Words("Two "), style(70.0)]), Table(vec![Words("fonts"), style(40.0)])]),
+        List(vec![Words("ExampleSans-Regular"), Words("ExampleSerif-Bold")]),
+    ];
+    text.extend([Absent, Absent, Number(1)]);
+    text.extend([Absent, Absent, Absent, Absent, Absent]);
+    text.extend([black(), Byte(1), Float(50.0), Absent, Float(10.0), Absent, Float(30.0)]);
+    let mut tables = vec![0u8; 4];
+    let root = put_table(&mut tables, &[Table(text)]);
+    tables[..4].copy_from_slice(&(root as u32).to_le_bytes());
+    let mut bytes = ((tables.len() + 4) as u32).to_le_bytes().to_vec();
+    bytes.extend([0u8; 4]);
+    bytes.extend([0x44, 0x33, 0x22, 0x11]);
+    bytes.extend(tables);
+    bytes
+}
+
+/// The binary form newer project versions write holds the same things in numbered fields.
+#[test]
+fn premiere_text_in_the_binary_form_becomes_a_text_layer() {
+    use filmcraft_project::ParamValue;
+    let xml = project_with_text_layer(&source_text_binary());
+    let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+    let said = report.to_string();
+    assert!(!said.contains("AE.ADBE Text"), "read, not skipped: {said}");
+    assert!(said.contains("more than one style"), "the second run is smaller: {said}");
+    let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+    assert!(video.enabled);
+    let layers: Vec<_> = video.graphic_layers().collect();
+    assert_eq!(layers.len(), 1);
+    let layer = layers[0];
+    let text = |id: &str| match &layer.param(id).unwrap().value {
+        ParamValue::Text(s) => s.clone(),
+        other => panic!("{id}: {other:?}"),
+    };
+    assert_eq!((text("text").as_str(), text("font").as_str(), text("font_style").as_str()), ("Two fonts", "Example Serif", "Bold"));
+    assert_eq!(layer.f64_at("size", Tick::ZERO), 70.0);
+    assert!(matches!(layer.param("align").unwrap().value, ParamValue::Choice(1)));
+    // a colour channel that is not written is 255
+    assert!(
+        matches!(layer.param("fill_color").unwrap().value, ParamValue::Color(c) if c == [236.0 / 255.0, 246.0 / 255.0, 1.0, 1.0]),
+        "{:?}",
+        layer.param("fill_color")
+    );
+    assert!(matches!(layer.param("stroke").unwrap().value, ParamValue::Bool(true)));
+    assert_eq!(layer.f64_at("stroke_width", Tick::ZERO), 4.0);
+    assert!(matches!(layer.param("stroke_color").unwrap().value, ParamValue::Color(c) if c == [0.0, 0.0, 0.0, 1.0]));
+    assert!(matches!(layer.param("shadow").unwrap().value, ParamValue::Bool(true)));
+    assert!(matches!(layer.param("shadow_color").unwrap().value, ParamValue::Color(c) if c == [0.0, 0.0, 0.0, 1.0]));
+    assert_eq!(
+        (layer.f64_at("shadow_opacity", Tick::ZERO), layer.f64_at("shadow_distance", Tick::ZERO), layer.f64_at("shadow_angle", Tick::ZERO)),
+        (50.0, 10.0, 30.0)
+    );
+    assert_eq!(layer.vec2_at("position", Tick::ZERO), Vec2::new(480.0, 540.0));
+}
+
+/// Every number in the binary form comes from the file: cut short anywhere, or with any byte
+/// changed, it is read or refused, never a panic and never a failed import.
+#[test]
+fn premiere_text_in_a_damaged_binary_form_never_panics() {
+    let good = source_text_binary();
+    let fix_length = |mut bytes: Vec<u8>| {
+        if bytes.len() >= 8 {
+            let body = (bytes.len() - 8) as u32;
+            bytes[..4].copy_from_slice(&body.to_le_bytes());
+        }
+        bytes
+    };
+    let mut cases: Vec<Vec<u8>> = (12..good.len()).map(|cut| fix_length(good[..cut].to_vec())).collect();
+    for at in 12..good.len() {
+        for value in [0x00, 0x7f, 0x80, 0xff] {
+            let mut changed = good.clone();
+            changed[at] = value;
+            cases.push(changed);
+        }
+    }
+    for case in cases {
+        let xml = project_with_text_layer(&case);
+        let result = std::panic::catch_unwind(|| premiere::import_project(xml.as_bytes(), &ImportOptions::default()).map(|_| ()));
+        assert!(matches!(result, Ok(Ok(()))), "{case:?}");
+    }
+}

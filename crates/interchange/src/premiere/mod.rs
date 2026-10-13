@@ -8,6 +8,7 @@ mod effects;
 mod graph;
 mod presets;
 mod project;
+mod text;
 
 use filmcraft_project::EffectInstance;
 use filmcraft_time::Tick;
