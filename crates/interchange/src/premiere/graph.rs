@@ -9,7 +9,7 @@ use crate::{Error, Result};
 
 pub(super) const PROJECT: &str = "Premiere Pro project";
 pub(super) const PRESETS: &str = "Premiere effect presets";
-const MAX_OBJECTS: usize = 200_000;
+use super::{MAX_OBJECTS, MAX_WORK, MAX_XML_NODES};
 
 pub(super) fn error(format: &'static str, message: impl Into<String>) -> Error {
     Error::Parse { format, message: message.into() }
@@ -17,7 +17,7 @@ pub(super) fn error(format: &'static str, message: impl Into<String>) -> Error {
 
 pub(super) fn decode(bytes: &[u8], format: &'static str) -> Result<String> {
     if bytes.len() > super::MAX_DOCUMENT_BYTES {
-        return Err(error(format, "document exceeds the 64 MiB size limit"));
+        return Err(error(format, "document exceeds the 512 MiB size limit"));
     }
     let mut decoded = Vec::new();
     let bytes = if bytes.starts_with(&[0x1f, 0x8b]) {
@@ -26,7 +26,7 @@ pub(super) fn decode(bytes: &[u8], format: &'static str) -> Result<String> {
             .read_to_end(&mut decoded)
             .map_err(|e| error(format, format!("invalid gzip document: {e}")))?;
         if decoded.len() > super::MAX_DOCUMENT_BYTES {
-            return Err(error(format, "decompressed document exceeds the 64 MiB size limit"));
+            return Err(error(format, "decompressed document exceeds the 512 MiB size limit"));
         }
         decoded.as_slice()
     } else {
@@ -46,7 +46,7 @@ pub(super) fn decode(bytes: &[u8], format: &'static str) -> Result<String> {
 }
 
 pub(super) fn parse<'i>(text: &'i str, format: &'static str) -> Result<Document<'i>> {
-    let doc = Document::parse_with_options(text, ParsingOptions { allow_dtd: false, nodes_limit: 2_000_000, ..Default::default() })
+    let doc = Document::parse_with_options(text, ParsingOptions { allow_dtd: false, nodes_limit: MAX_XML_NODES, ..Default::default() })
         .map_err(|e| error(format, e.to_string()))?;
     let root = doc.root_element();
     if !root.has_tag_name("PremiereData") || root.attribute("Version") != Some("3") {
@@ -119,18 +119,23 @@ impl<'a, 'i> Graph<'a, 'i> {
                         return Err(error(format, format!("empty or duplicate {field} `{id}`")));
                     }
                     if objects.len() > MAX_OBJECTS {
-                        return Err(error(format, "object graph exceeds the 200000 object limit"));
+                        return Err(error(format, format!("object graph exceeds the {MAX_OBJECTS} object limit")));
                     }
                 }
             }
         }
-        Ok(Self { root, format, objects, work_left: Cell::new(2_000_000) })
+        Ok(Self { root, format, objects, work_left: Cell::new(MAX_WORK) })
     }
 
     pub fn charge(&self) -> Result<()> {
         let left = self.work_left.get().checked_sub(1).ok_or_else(|| error(self.format, "object graph expansion exceeds the work limit"))?;
         self.work_left.set(left);
         Ok(())
+    }
+
+    /// The work budget is spent: every further `charge` fails, so the import must stop.
+    pub fn exhausted(&self) -> bool {
+        self.work_left.get() == 0
     }
 
     pub fn resolve(&self, n: Node<'a, 'i>) -> Result<Node<'a, 'i>> {

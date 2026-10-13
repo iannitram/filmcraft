@@ -67,6 +67,9 @@ Both imports return a `report`. File import carries it in `documents`; preset im
 it directly. The UI shows the first report entries in its status bar. Unknown effects and
 parameters are named; an entirely unsupported preset is not added as an empty preset.
 Malformed documents are parsed completely before project or preset-library changes commit.
+In a project, an effect parameter whose value cannot be read keeps the FilmCraft default and is
+named in the report, so one odd value does not keep the whole project from opening; a preset
+with such a value is still refused.
 Preset-library save failure restores the previous in-memory library.
 
 The current mapping is not a claim of pixel parity with Premiere. Temporal influence is read,
@@ -74,15 +77,15 @@ but temporal velocities and spatial Bézier handles are approximated by FilmCraf
 and reported. Composition shutter angle is approximated as 180° when requested by Transform.
 Masks, opaque effect data, Lumetri/Ultra Key/text components, most audio plug-ins, mixer
 automation, native routing between multiple audio streams, multicam/merged-clip semantics,
-markers, timecode origins, pixel-aspect metadata,
+markers, timecode origins, the pixel aspect of media (a sequence's own pixel aspect is read),
 advanced colour-management metadata and native project export are not translated.
 Unsupported generated media retain offline placeholders;
 normal file-backed unsupported media remain relinkable file references. Overlapping clip
 ranges on one native track and cyclic bins/sequences are rejected rather than silently changed.
 Mixed transition/clip-effect presets and disabled transition presets are rejected.
 
-Limits: 64 MiB of encoded/decompressed XML, two million XML nodes, 200,000 indexed objects,
-two million graph/keyframe expansion operations, 64 nesting levels, 1,024 tracks per group,
+Limits: 512 MiB of encoded/decompressed XML, 64 million XML nodes, four million indexed objects,
+64 million graph/keyframe expansion operations, 64 nesting levels, 1,024 tracks per group,
 65,536 keyframes per parameter. Imported timeline/source/keyframe spans leave arithmetic
 headroom by limiting ticks to one quarter of the signed 64-bit range. No entity DTD is loaded.
 Shared text fields are bounded before graph expansion: identifiers/XML field names 256 bytes,
