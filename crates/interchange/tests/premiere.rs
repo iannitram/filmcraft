@@ -120,6 +120,32 @@ fn premiere_native_project_keeps_cuts_links_bins_and_motion() {
     assert!(export(&imported.project, id, Format::PremiereProject, &ExportOptions::default()).is_err());
 }
 
+/// A newer project file leaves a value at its default out: a clip at the very start of its track
+/// has an End and no Start. It starts at zero; the project must not be refused for it. An item
+/// with no End is still refused.
+#[test]
+fn premiere_track_item_without_a_start_begins_at_zero() {
+    let whole = project_xml();
+    assert_eq!(whole.matches("<Start>0</Start>").count(), 2, "the fixture's video and audio clip both start at zero");
+    let xml = whole.replace("<Start>0</Start>", "");
+    let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+    assert!(!report.has_warnings(), "{report}");
+    let (with_start, _) = premiere::import_project(whole.as_bytes(), &ImportOptions::default()).unwrap();
+    for (a, b) in [(&imported, &with_start)] {
+        let (sa, sb) = (a.project.sequence(a.sequences[0]).unwrap(), b.project.sequence(b.sequences[0]).unwrap());
+        let (va, vb) = (&sa.video_tracks[0].items[0], &sb.video_tracks[0].items[0]);
+        assert_eq!((va.start, va.duration, va.source_in), (Tick::ZERO, Tick(2 * TPS), vb.source_in));
+        assert_eq!((va.start, va.duration), (vb.start, vb.duration), "the same clip as with the zero written out");
+        let (aa, ab) = (&sa.audio_tracks[0].items[0], &sb.audio_tracks[0].items[0]);
+        assert_eq!((aa.start, aa.duration), (ab.start, ab.duration));
+        assert_eq!(aa.start, Tick::ZERO);
+    }
+    let no_end = whole.replacen(&format!("<End>{}</End>", 2 * TPS), "", 1);
+    assert_ne!(no_end, whole, "the fixture's first clip ends at two seconds");
+    let refused = premiere::import_project(no_end.as_bytes(), &ImportOptions::default()).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(refused.contains("missing ClipTrackItem/TrackItem/End"), "{refused}");
+}
+
 #[test]
 fn premiere_gzip_and_utf16_decode_the_same_project() {
     let xml = project_xml();
