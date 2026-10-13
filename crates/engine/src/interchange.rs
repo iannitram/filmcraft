@@ -57,6 +57,21 @@ pub fn import(s: &mut Session, path: &str, bytes: &[u8], format: Format) -> Resu
         // picture size is only what the document says so far (an EDL says nothing: the importer
         // assumes the sequence size), so its clips' anchors wait for Link Media below.
         proj.resolve_placed_auto_points(|seq| !before.contains(&seq), |source| !is_file_media(source));
+        // A Premiere project names its files where they were on the machine that saved it. On
+        // another machine each one is simply not there yet: leave it "missing", which Link
+        // Media's folder mapping and Relink Moved Media work on, not "made offline", which they
+        // skip because it reads as someone's deliberate Make Offline. Sources with no file at
+        // all (graphics made inside Premiere) have an empty path and stay offline placeholders.
+        // Done inside the import's own edit, so the import is still one undo step.
+        if format == Format::PremiereProject {
+            for item in proj.items.values_mut().filter(|i| !before.contains(&i.id)) {
+                if let ItemKind::Media(m) = &mut item.kind
+                    && matches!(&m.media, MediaRef::File { path } if !path.is_empty())
+                {
+                    m.offline = false;
+                }
+            }
+        }
         Ok(seqs)
     })?;
     // Link media: probe each new file-backed item that exists, through the host's reader as a
@@ -106,6 +121,10 @@ pub fn import(s: &mut Session, path: &str, bytes: &[u8], format: Format) -> Resu
             }
             None => offline.push(mpath),
         }
+    }
+    if format == Format::PremiereProject {
+        // the files that were not found are now on the missing list (Link Media, the slate)
+        crate::relink::refresh(s);
     }
     if let Some(&first) = seqs.first() {
         s.state.active_sequence = Some(first);
