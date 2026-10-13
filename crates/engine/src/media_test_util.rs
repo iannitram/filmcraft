@@ -20,7 +20,7 @@ pub fn tmp_dir(name: &str) -> PathBuf {
 }
 
 /// Write a `frames`-frame `w`×`h` 24 fps movie of a demo scene (with its audio) to `path`.
-/// `.mov` = ProRes 422 HQ + PCM, `.mp4` = H.264 + AAC.
+/// `.mov` = ProRes 422 HQ + PCM, `.mp4` = H.264 + AAC, `.m4a` = its sound alone as AAC.
 pub fn make_movie(path: &Path, scene: DemoScene, w: u32, h: u32, frames: i64) {
     let rate = FrameRate::FPS_24;
     let dur = rate.tick_of(frames);
@@ -49,7 +49,11 @@ pub fn make_movie(path: &Path, scene: DemoScene, w: u32, h: u32, frames: i64) {
     let q = p.sequence_mut(seq).unwrap();
     q.video_tracks[0].items.push(v);
     q.audio_tracks[0].items.push(a);
-    let fmt = if path.extension().is_some_and(|e| e == "mp4") { filmcraft_export::Format::H264 } else { filmcraft_export::Format::ProRes };
+    let fmt = match path.extension().and_then(|e| e.to_str()) {
+        Some("mp4") => filmcraft_export::Format::H264,
+        Some("m4a") => filmcraft_export::Format::Aac,
+        _ => filmcraft_export::Format::ProRes,
+    };
     let settings = filmcraft_export::ExportSettings { format: fmt, path: path.to_string_lossy().into_owned(), bitrate_kbps: 4000, ..Default::default() };
     let shared: filmcraft_media::SharedSource = Arc::new(src);
     let provider = move |id: ItemId| (id == item).then(|| shared.clone());
