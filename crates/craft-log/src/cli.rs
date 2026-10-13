@@ -33,10 +33,55 @@ pub fn open(dir: &Path, app: &str) -> std::io::Result<(PathBuf, File, u64)> {
         // Several runs may race here; whichever rename wins, a fresh file follows.
         let _ = std::fs::rename(&path, dir.join(format!("{app}-cli.1.log")));
     }
-    let file = OpenOptions::new().create(true).append(true).open(&path)?;
+    let file = open_append(&path)?;
     let len = file.metadata().map(|m| m.len()).unwrap_or(0);
     Ok((path, file, len))
 }
+
+/// Open `path` for appending without ever waiting on it. Opening a FIFO for writing waits for a
+/// reader, so a FIFO in place of the log would hang every command: an existing file is opened only
+/// when it is a regular file (a FIFO, a device or a folder is refused), and an absent one is made
+/// with `create_new`, which never opens something put there in the meantime. On Linux the open
+/// also carries `O_NONBLOCK`, which closes the gap between the check and the open (a FIFO swapped
+/// in then fails at once instead of waiting); for a regular file it changes nothing.
+pub fn open_append(path: &Path) -> std::io::Result<File> {
+    use std::io::{Error, ErrorKind};
+    for _ in 0..3 {
+        let file = match std::fs::metadata(path) {
+            Ok(m) if m.is_file() => append_options(false).open(path)?,
+            Ok(_) => return Err(Error::other(format!("{} is not a regular file", path.display()))),
+            Err(e) if e.kind() == ErrorKind::NotFound => match append_options(true).open(path) {
+                Ok(f) => f,
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => continue, // made by another run just now
+                Err(e) => return Err(e),
+            },
+            Err(e) => return Err(e),
+        };
+        // what was opened, in case it was swapped between the check and the open
+        return if file.metadata()?.is_file() { Ok(file) } else { Err(Error::other(format!("{} is not a regular file", path.display()))) };
+    }
+    Err(Error::other(format!("{} kept appearing and vanishing", path.display())))
+}
+
+/// Append (and create only when `create_new`), never blocking where the platform allows.
+pub(crate) fn append_options(create_new: bool) -> OpenOptions {
+    let mut o = OpenOptions::new();
+    o.append(true).create_new(create_new);
+    nonblocking(&mut o);
+    o
+}
+
+/// `O_NONBLOCK` (0o4000 in Linux's generic flag values, which these architectures use; there is no
+/// `libc` here to name it): a FIFO without a reader then fails to open instead of waiting.
+#[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64", target_arch = "arm", target_arch = "riscv64")))]
+pub(crate) fn nonblocking(o: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+    o.custom_flags(0o4000);
+}
+
+/// Elsewhere only the regular-file check guards the open.
+#[cfg(not(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64", target_arch = "arm", target_arch = "riscv64"))))]
+pub(crate) fn nonblocking(_: &mut OpenOptions) {}
 
 struct Out {
     file: Option<File>,
@@ -258,6 +303,25 @@ mod tests {
         let msgs: Vec<_> = text.lines().map(|l| l.rsplit_once("\"msg\":").unwrap().1).collect();
         assert_eq!(msgs, ["\"same\"}", "\"previous line repeated 3 times\"}", "\"next\"}"]);
         assert!(text.lines().all(|l| l.starts_with("{\"ts\":\"") && l.contains(&format!("\"pid\":{}", std::process::id()))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_fifo_swapped_in_after_the_check_fails_to_open_instead_of_waiting() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let dir = temp_dir("fifo-race");
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("app-cli.log");
+        if !std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success()) {
+            return;
+        }
+        // the open itself, as if the regular-file check had passed just before the swap
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || tx.send(append_options(false).open(&fifo).is_err()));
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(true));
+        assert!(open(&dir, "app").is_err(), "a FIFO is never the log");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
