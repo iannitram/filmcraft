@@ -103,6 +103,9 @@ pub fn window_ready(cc: &eframe::CreationContext<'_>, gpu_compositor: bool) {
         if screens == 0 {
             log::info!("screens: none reported by the window system");
         }
+        if current.is_none() {
+            log::info!("screens: the window system does not say which screen holds the window");
+        }
         let (inner, scale) = (w.inner_size(), w.scale_factor());
         let got = inner.to_logical::<f64>(scale);
         log::info!(
@@ -118,7 +121,9 @@ pub fn window_ready(cc: &eframe::CreationContext<'_>, gpu_compositor: bool) {
     } else {
         log::info!("screens: unknown (eframe gave no window handle)");
     }
-    // after the compositor's first configure: asked versus got, once
+    // after the compositor's first configure: asked versus got, once. The size comes from the
+    // window itself: egui's `inner_rect` stays empty on Wayland, where a window has no position.
+    let window = cc.winit_window().cloned();
     let done = AtomicBool::new(false);
     cc.egui_ctx.on_end_pass(
         "self-logging-window-size",
@@ -127,25 +132,39 @@ pub fn window_ready(cc: &eframe::CreationContext<'_>, gpu_compositor: bool) {
             if ctx.cumulative_frame_nr() < SIZE_CHECK_FRAME || done.swap(true, Ordering::Relaxed) {
                 return;
             }
-            let (inner, ppp, monitor, maximized, fullscreen) = ctx.input(|i| {
-                (i.viewport().inner_rect, i.viewport().native_pixels_per_point, i.viewport().monitor_size, i.viewport().maximized, i.viewport().fullscreen)
-            });
-            let Some(inner) = inner else {
+            let (rect, ppp) = ctx.input(|i| (i.viewport().inner_rect, i.viewport().native_pixels_per_point));
+            let got = match &window {
+                Some(w) => {
+                    let (inner, scale) = (w.inner_size(), w.scale_factor());
+                    let l = inner.to_logical::<f64>(scale);
+                    // points, as asked (egui's unit is f32)
+                    let points = [l.width as f32, l.height as f32];
+                    Some((
+                        points,
+                        format!(
+                            "{}x{} pixels, scale {scale}, maximized {}, full screen {}",
+                            inner.width,
+                            inner.height,
+                            w.is_maximized(),
+                            w.fullscreen().is_some()
+                        ),
+                    ))
+                }
+                None => rect.map(|r| ([r.width(), r.height()], "from egui".to_owned())),
+            };
+            let Some((points, detail)) = got else {
                 log::info!("window: size unknown after {SIZE_CHECK_FRAME} frames");
                 return;
             };
             let text = format!(
-                "window: asked {}x{} points, got {:.0}x{:.0} points (pixels per point {}, screen {}, maximized {}, full screen {})",
+                "window: asked {}x{} points, got {:.0}x{:.0} points after {SIZE_CHECK_FRAME} frames ({detail}, egui pixels per point {})",
                 asked[0],
                 asked[1],
-                inner.width(),
-                inner.height(),
+                points[0],
+                points[1],
                 ppp.map_or_else(|| "unknown".to_owned(), |p| p.to_string()),
-                monitor.map_or_else(|| "unknown".to_owned(), |m| format!("{:.0}x{:.0} points", m.x, m.y)),
-                maximized.map_or_else(|| "unknown".to_owned(), |b| b.to_string()),
-                fullscreen.map_or_else(|| "unknown".to_owned(), |b| b.to_string()),
             );
-            if (inner.width() - asked[0]).abs() > 1.0 || (inner.height() - asked[1]).abs() > 1.0 {
+            if (points[0] - asked[0]).abs() > 1.0 || (points[1] - asked[1]).abs() > 1.0 {
                 log::warn!("decision: {text}: the window system fitted or clamped it");
             } else {
                 log::info!("{text}");
