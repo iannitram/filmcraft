@@ -14,6 +14,16 @@ enum Conversion {
     Gain,
 }
 
+/// What to do with a parameter whose value cannot be read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum BadValue {
+    /// Fail the import: a preset that would silently lose a value is not added.
+    Reject,
+    /// Keep the FilmCraft default and say so in the report: one odd value in one effect must
+    /// not keep a whole project, with years of edits in it, from opening.
+    ReportAndDefault,
+}
+
 /// Coordinates are normalised in native files. Motion's position is in sequence pixels;
 /// anchors and standard effects are in source pixels.
 pub(super) fn component(
@@ -22,6 +32,7 @@ pub(super) fn component(
     origin: Tick,
     sequence_size: (u32, u32),
     source_size: (u32, u32),
+    bad_value: BadValue,
     report: &mut Report,
 ) -> Result<Option<EffectInstance>> {
     let audio = node.has_tag_name("AudioFilterComponent");
@@ -51,6 +62,9 @@ pub(super) fn component(
     let mut volume_muted = false;
     for (index, native) in parameters.into_iter().enumerate() {
         let number = graph.integer(native, &["ParameterID"], (index + 1) as i64)?;
+        // Observed project files give Gaussian Blur's Repeat Edge Pixels checkbox the same
+        // ParameterID as Blurriness (1, 2, 1): tell the two apart by what they hold.
+        let number = if id == "gaussian_blur" && number == 1 && matches!(static_text(native), Some("true" | "false")) { 3 } else { number };
         let mapped = match (id, number) {
             ("motion", 1) => Some(("position", Conversion::Point(sequence_size))),
             ("motion", 2) => Some(("scale", Conversion::Native)),
@@ -86,7 +100,20 @@ pub(super) fn component(
         };
         if let Some((target, conversion)) = mapped {
             let Some(default) = effect.params.get(target).map(|p| p.value.clone()) else { continue };
-            effect.params.insert(target.to_string(), parameter(graph, native, origin, &default, conversion, match_name, report)?);
+            match parameter(graph, native, origin, &default, conversion, match_name, report) {
+                Ok(param) => {
+                    effect.params.insert(target.to_string(), param);
+                }
+                // out of budget is never a property of one value: stop
+                Err(e) if bad_value == BadValue::ReportAndDefault && !graph.exhausted() => {
+                    let reason = match e {
+                        crate::Error::Parse { message, .. } => message,
+                        other => other.to_string(),
+                    };
+                    report.warn(format!("Premiere effect {match_name} parameter {number} could not be read ({reason}); the FilmCraft default was used"));
+                }
+                Err(e) => return Err(e),
+            }
         } else if id == "transform" && number == 9 {
             composition_shutter = matches!(static_text(native), Some("true" | "1"));
         } else if id == "volume" && number == 1 {

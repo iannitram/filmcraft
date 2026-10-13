@@ -37,7 +37,15 @@ pub struct ImportedPreset {
 }
 
 /// Native documents are bounded before decompression and before parsing their object graph.
-pub const MAX_DOCUMENT_BYTES: usize = 64 * 1024 * 1024;
+/// Long-running real projects decompress to hundreds of MiB (272 MiB, 5 million elements and
+/// 600,000 objects were measured in one library of 291 projects), so the bounds sit well above that.
+pub const MAX_DOCUMENT_BYTES: usize = 512 * 1024 * 1024;
+/// XML nodes (elements and text) one document may hold.
+pub(super) const MAX_XML_NODES: u32 = 64_000_000;
+/// Objects one document may define, and references one object list may hold.
+pub(super) const MAX_OBJECTS: usize = 4_000_000;
+/// Reference resolutions and keyframe records one import may spend.
+pub(super) const MAX_WORK: usize = 64_000_000;
 /// Leave headroom for subsequent edit and parameter interpolation arithmetic.
 pub(super) const MAX_TIME_TICKS: i64 = i64::MAX / 4;
 
