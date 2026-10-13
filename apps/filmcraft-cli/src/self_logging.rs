@@ -26,8 +26,16 @@ fn data_dir(given: Option<&str>) -> Option<PathBuf> {
     given.map(PathBuf::from).or_else(filmcraft_engine::autosave::default_data_dir)
 }
 
-/// Start this run's log (after `--help` and `--version`, which leave no trace).
-pub fn install(given: Option<&str>) {
+/// Subcommands that only print, and leave no trace (as `--help` and `--version`, which return
+/// before the log is installed): no log folder is created for them.
+const QUIET_COMMANDS: &[&str] = &["help", "-h", "version"];
+
+/// Start this run's log, unless the run only prints help or the version (`command`, the first
+/// positional argument). A usage error is a failure: it is logged.
+pub fn install(given: Option<&str>, command: Option<&str>) {
+    if command.is_some_and(|c| QUIET_COMMANDS.contains(&c)) {
+        return;
+    }
     let dir = data_dir(given).map(|d| d.join(report::LOG_DIR));
     let _ = craft_log::cli::install(&APP, dir.as_deref(), SECRET_ARGS);
 }

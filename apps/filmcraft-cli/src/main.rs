@@ -300,7 +300,7 @@ async fn cli() {
     // switch. It also leaves the OS media APIs unregistered: no hardware encoder is offered and no
     // encoder probe session is opened, so a run with it never touches the video hardware to decode
     // or encode (shared machines, comparing against the software decoders).
-    self_logging::install(a.opt("--data-dir")); // ours
+    self_logging::install(a.opt("--data-dir"), a.pos(0)); // ours
     if a.flag("--no-hardware") || env_switch_on(std::env::var_os("FILMCRAFT_NO_HARDWARE").as_deref()) {
         filmcraft_codecs::hw::set_hardware_decoding(false);
     } else {
