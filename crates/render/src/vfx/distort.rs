@@ -233,7 +233,6 @@ pub fn rotate_3d(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
 
 /// Transform: affine place, with optional shutter-angle motion blur when the override is on.
 pub fn transform_fx(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
-    // the sequence's frame time on every render path (adjustment layers have no `env`, #1088)
     let fps = cx.frame_rate.max(1.0);
     let angle = fv(e, "shutter_angle", cx);
     let n = if bv(e, "shutter_override") && angle > 0.5 { 7 } else { 1 };
@@ -244,11 +243,11 @@ pub fn transform_fx(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
             t,
             px_scale: cx.px_scale,
             seconds: cx.seconds + k * span,
-            frame_rate: cx.frame_rate,
             timecode: cx.timecode,
             clip_name: cx.clip_name,
             project: cx.project,
             env: cx.env,
+            frame_rate: cx.frame_rate,
             working: cx.working,
         };
         let anchor = crate::effects::point(e, "anchor", &cx2, im);
