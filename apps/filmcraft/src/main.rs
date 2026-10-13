@@ -129,6 +129,7 @@ fn main() -> eframe::Result {
     // see graphics.rs.
     let backend_override = eframe::wgpu::Backends::from_env();
     let mut graphics = graphics::GraphicsStart::begin(data_root.as_deref(), backend_override.is_some(), launch.graphics);
+    self_logging::start_report(data_root.as_deref(), &graphics); // ours
     // The GPU export renderer creates its own wgpu instance with every backend; after a start
     // fell back, that would load the driver that failed. Exports then composite on the CPU.
     if graphics.mode() == graphics::Mode::Default {
@@ -164,6 +165,7 @@ fn main() -> eframe::Result {
         filmcraft_ui_egui::crash::record(&msg);
         let _ = rfd::MessageDialog::new().set_title("FilmCraft").set_description(&msg).set_level(rfd::MessageLevel::Error).show();
     }
+    self_logging::ended(&started); // ours
     started
 }
 
@@ -261,6 +263,7 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
         {
             app.set_wgpu(rs);
         }
+        self_logging::window_ready(cc, app.gpu.is_some()); // ours
         // Keep device selection available even when the default device is unavailable.
         // Settings ▸ Audio Hardware is applied on the first frame (`apply_prefs`).
         app.audio = Some(Box::new(audio::CpalOut::new()));
