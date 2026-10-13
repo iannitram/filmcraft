@@ -29,6 +29,7 @@ pub fn import_project(bytes: &[u8], opts: &ImportOptions) -> Result<(Imported, R
         nesting: HashMap::new(),
         generated: HashSet::new(),
         canvases: Vec::new(),
+        shared_values: None,
         report: &mut report,
     };
     let project = elements(importer.graph.root)
@@ -84,6 +85,8 @@ struct Importer<'a, 'i, 'o, 'r> {
     generated: HashSet<ItemId>,
     /// The sources of imported graphic clips, one per sequence frame size and rate.
     canvases: Vec<((u32, u32, FrameRate), ItemId)>,
+    /// Binary parameter values by their hash, gathered when the first text layer is met.
+    shared_values: Option<HashMap<&'a str, &'a str>>,
     report: &'r mut Report,
 }
 
@@ -339,12 +342,13 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                         let chain = self.graph.resolve(reference)?;
                         for component in self.graph.references(chain, &["ComponentChain", "Components"])? {
                             // a text layer of a graphic made inside the application
-                            if generated
-                                && child_text(component, "MatchName") == Some(text::MATCH_NAME)
-                                && let Some(layer) = text::layer(&self.graph, component, Tick::ZERO, sequence_size, self.report)?
-                            {
-                                layers.push(layer);
-                                continue;
+                            if generated && child_text(component, "MatchName") == Some(text::MATCH_NAME) {
+                                let root = self.graph.root;
+                                let shared = self.shared_values.get_or_insert_with(|| text::shared_values(root));
+                                if let Some(layer) = text::layer(&self.graph, component, Tick::ZERO, sequence_size, shared, self.report)? {
+                                    layers.push(layer);
+                                    continue;
+                                }
                             }
                             if let Some(effect) = effects::component(
                                 &self.graph,
