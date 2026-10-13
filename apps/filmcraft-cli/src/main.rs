@@ -107,7 +107,12 @@ OPTIONS
   --bridge <127.0.0.1:PORT>     send commands to the running app (`filmcraft --control PORT`)
   --data-dir <dir>              FilmCraft data directory for user export presets (headless;
                                 default: the app's data directory)
-  --keep-going                  `run`: report failing lines and continue
+  --no-hardware                 use no hardware decoder or encoder (headless): video is decoded
+                                and encoded in software only, as with Settings ▸ Playback ▸
+                                Hardware decoding Off. Formats that need a hardware encoder on
+                                this system are then unavailable. Compositing on the GPU is a
+                                separate switch: `export --gpu-rendering off`
+  --keep-going                 `run`: report failing lines and continue
   --compact                     one-line JSON output
 
 VALUES
@@ -277,7 +282,15 @@ async fn cli() {
         outln!("filmcraft-cli {}", env!("CARGO_PKG_VERSION"));
         return;
     }
-    register_hardware_decoders();
+    // The headless CLI reads no preferences file, so `--no-hardware` is its Hardware decoding
+    // switch. It also leaves the OS media APIs unregistered: no hardware encoder is offered and no
+    // encoder probe session is opened, so a run with it never touches the video hardware to decode
+    // or encode (shared machines, comparing against the software decoders).
+    if a.flag("--no-hardware") {
+        filmcraft_codecs::hw::set_hardware_decoding(false);
+    } else {
+        register_hardware_decoders();
+    }
     register_gpu_frame_renderer();
     let Some(cmd) = a.pos(0) else { usage("missing subcommand") };
     match cmd {
@@ -479,7 +492,7 @@ async fn cli() {
             diag(format_args!("rendered {}x{} in {:.1} ms → {out}", img.w, img.h, dt.as_secs_f64() * 1000.0));
         }
         "mcp" => {
-            if let Some(opt) = a.unknown_opt(&["--bridge", "--project", "--demo", "--data-dir"]) {
+            if let Some(opt) = a.unknown_opt(&["--bridge", "--project", "--demo", "--data-dir", "--no-hardware"]) {
                 usage(format!("unknown mcp option `{opt}`"));
             }
             let server = match a.opt("--bridge") {
