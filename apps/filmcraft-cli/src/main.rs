@@ -111,8 +111,10 @@ OPTIONS
                                 and encoded in software only, as with Settings ▸ Playback ▸
                                 Hardware decoding Off. Formats that need a hardware encoder on
                                 this system are then unavailable. Compositing on the GPU is a
-                                separate switch: `export --gpu-rendering off`
-  --keep-going                 `run`: report failing lines and continue
+                                separate switch: `export --gpu-rendering off`. Setting
+                                FILMCRAFT_NO_HARDWARE=1 in the environment does the same for
+                                every run that inherits it
+  --keep-going                `run`: report failing lines and continue
   --compact                     one-line JSON output
 
 VALUES
@@ -253,6 +255,13 @@ fn register_hardware_decoders() -> filmcraft_platform::Availability {
     filmcraft_platform::register()
 }
 
+/// Whether an environment switch is on: set, not empty and not `0`. `FILMCRAFT_NO_HARDWARE` is
+/// `--no-hardware` for every run that inherits the environment: a script or test suite that starts
+/// the CLI many times on a machine whose video hardware is busy sets it once.
+fn env_switch_on(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|v| !v.is_empty() && v != "0")
+}
+
 /// `path` made absolute against the working directory, as the project stores it. Unlike
 /// `canonicalize`, `std::path::absolute` keeps symlinks and adds no Windows verbatim `\\?\`
 /// prefix (#850). A path it cannot resolve is kept as given.
@@ -286,7 +295,7 @@ async fn cli() {
     // switch. It also leaves the OS media APIs unregistered: no hardware encoder is offered and no
     // encoder probe session is opened, so a run with it never touches the video hardware to decode
     // or encode (shared machines, comparing against the software decoders).
-    if a.flag("--no-hardware") {
+    if a.flag("--no-hardware") || env_switch_on(std::env::var_os("FILMCRAFT_NO_HARDWARE").as_deref()) {
         filmcraft_codecs::hw::set_hardware_decoding(false);
     } else {
         register_hardware_decoders();
@@ -587,6 +596,17 @@ fn set_custom_bounds(p: &mut Value, start: Option<&str>, end: Option<&str>) {
 
 #[cfg(test)]
 mod format_tests {
+    #[test]
+    fn an_environment_switch_is_on_unless_unset_empty_or_zero() {
+        use std::ffi::OsStr;
+        assert!(!super::env_switch_on(None));
+        assert!(!super::env_switch_on(Some(OsStr::new(""))));
+        assert!(!super::env_switch_on(Some(OsStr::new("0"))));
+        for on in ["1", "true", "yes", "00"] {
+            assert!(super::env_switch_on(Some(OsStr::new(on))), "{on}");
+        }
+    }
+
     #[test]
     fn render_reports_the_real_reason() {
         let mut s = filmcraft_engine::Session::default();
