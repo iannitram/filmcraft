@@ -34,6 +34,7 @@ filmcraft-ogg = { workspace = true }
 filmcraft-automation = { workspace = true }
 serde_json = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+wgpu = { version = "30", default-features = false } # ours (self-logging: `diagnostics` lists the graphics adapters)
 
 [dev-dependencies]
 filmcraft-testkit = { workspace = true }
