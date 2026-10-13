@@ -181,6 +181,8 @@ pub struct CliLogger {
     filter: Filter,
     json: bool,
     stderr: bool,
+    /// Values of secret arguments, longest first: shown as [`HIDDEN`] in every line.
+    secrets: Vec<String>,
     path: Option<PathBuf>,
     out: Mutex<Out>,
     collapse: Mutex<Collapser>,
@@ -195,7 +197,22 @@ impl CliLogger {
         };
         let newline_first = path.as_deref().is_some_and(ends_mid_line);
         let out = Out { file, written, capped: false, newline_first };
-        CliLogger { filter, json, stderr, path, out: Mutex::new(out), collapse: Mutex::new(Collapser::default()) }
+        CliLogger { filter, json, stderr, secrets: Vec::new(), path, out: Mutex::new(out), collapse: Mutex::new(Collapser::default()) }
+    }
+
+    /// The same logger, showing each of `values` (secret arguments' values) as [`HIDDEN`]
+    /// wherever it appears in a line, an error's text included.
+    #[must_use]
+    pub fn with_secrets(mut self, values: Vec<String>) -> CliLogger {
+        self.secrets = values.into_iter().filter(|v| !v.is_empty()).collect();
+        self.secrets.sort_by_key(|v| std::cmp::Reverse(v.len()));
+        self.secrets.dedup();
+        self
+    }
+
+    /// `text` with every secret value shown as [`HIDDEN`].
+    pub fn hide_secrets<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, str> {
+        hide(text, &self.secrets)
     }
 
     /// The log file, when there is one.
@@ -204,6 +221,7 @@ impl CliLogger {
     }
 
     fn write(&self, level: log::Level, target: &str, message: &str) {
+        let message = &*self.hide_secrets(message);
         let thread = std::thread::current();
         let line = Line { ts: &timestamp(SystemTime::now()), level, pid: Some(std::process::id()), thread: thread.name().unwrap_or("?"), target, message };
         let text = line.text();
@@ -278,20 +296,46 @@ impl log::Log for CliLogger {
 
 static CLI: OnceLock<CliLogger> = OnceLock::new();
 
+/// What a secret argument's value shows as.
+pub const HIDDEN: &str = "***";
+
+fn hide<'a>(text: &'a str, secrets: &[String]) -> std::borrow::Cow<'a, str> {
+    let mut out = std::borrow::Cow::Borrowed(text);
+    for s in secrets {
+        if out.contains(s.as_str()) {
+            out = std::borrow::Cow::Owned(out.replace(s.as_str(), HIDDEN));
+        }
+    }
+    out
+}
+
+/// `text` with the installed command-line logger's secret values hidden (for text that leaves
+/// the process another way, a crash file's panic message). Unchanged without one.
+pub fn hide_secrets(text: &str) -> String {
+    installed().map_or_else(|| text.to_owned(), |l| l.hide_secrets(text).into_owned())
+}
+
 /// Install the command-line logger for `app`, writing to `<log_dir>/<app>-cli.log` (no file when
-/// `log_dir` is `None` or unusable). Logs the build line and the filter in force first. Returns
-/// `None` when another logger was installed first.
-pub fn install(app: &App, log_dir: Option<&Path>) -> Option<&'static CliLogger> {
+/// `log_dir` is `None` or unusable). Logs the build line and the command line first.
+///
+/// `secret_args` names the arguments whose values are never logged (`&["--control-token"]`):
+/// `--control-token <value>` and `--control-token=<value>` show the value as `***`, and so does
+/// every later line it appears in, in the file (text or JSON), in the copy on standard error, and in
+/// a failing run's error. Returns `None` when another logger was installed first.
+pub fn install(app: &App, log_dir: Option<&Path>, secret_args: &[&str]) -> Option<&'static CliLogger> {
     let (spec, source) = filter::spec_from_env(app.ours, app.default_filter);
     let filter = Filter::parse(&spec);
     let max = filter.max().max(LevelFilter::Info);
     let stderr = matches!(std::env::var("CRAFT_LOG_STDERR").ok().as_deref().map(str::trim), Some("1" | "true" | "yes"));
     let file = log_dir.and_then(|d| open(d, app.name).ok());
-    let logger = CLI.get_or_init(|| CliLogger::new(filter, filter::json_from_env(), stderr, file));
+    let args: Vec<String> = std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();
+    let (shown, secrets) = mask_args(&args, secret_args);
+    let logger = CLI.get_or_init(|| CliLogger::new(filter, filter::json_from_env(), stderr, file).with_secrets(secrets));
     log::set_logger(logger).ok()?;
     log::set_max_level(max);
     logger.write(log::Level::Info, app.name, &app.build_line());
-    logger.write(log::Level::Info, app.name, &format!("command line: {}; log filter \"{spec}\" from {}", args_masked(), source.name()));
+    let command_line = crate::report::mask_home(&shown.join(" "));
+    logger.write(log::Level::Info, app.name, &format!("command line: {command_line}; log filter \"{spec}\" from {}", source.name()));
     crate::set_log_path(logger.path().map(Path::to_path_buf));
     crate::stall::start(app.name);
     Some(logger)
@@ -302,19 +346,32 @@ pub fn installed() -> Option<&'static CliLogger> {
     CLI.get()
 }
 
-/// The program's arguments with the home folder shown as `~`. Read with `args_os`: `args` panics
-/// on an argument that is not Unicode (a Latin-1 file name on Linux), which would turn a usage
-/// error into a crash; such bytes show as U+FFFD.
-fn args_masked() -> String {
-    let home = std::env::var("HOME").ok().filter(|h| h.len() > 1);
-    std::env::args_os()
-        .map(|a| a.to_string_lossy().into_owned())
-        .map(|a| match &home {
-            Some(h) => a.replace(h.as_str(), "~"),
-            None => a,
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+/// `args` as logged, and the secret values found: the value after an argument named in
+/// `secret_args` (`--token <value>`), or after its `=` (`--token=<value>`), shows as [`HIDDEN`].
+/// The caller reads the arguments with `args_os` and converts them lossily (`args` panics on an
+/// argument that is not Unicode, a Latin-1 file name on Linux, turning a usage error into a
+/// crash); the program's own handling of its arguments is not touched.
+pub fn mask_args(args: &[String], secret_args: &[&str]) -> (Vec<String>, Vec<String>) {
+    let mut shown = Vec::with_capacity(args.len());
+    let mut secrets = Vec::new();
+    let mut hide_next = false;
+    for a in args {
+        if std::mem::take(&mut hide_next) {
+            secrets.push(a.clone());
+            shown.push(HIDDEN.to_owned());
+            continue;
+        }
+        if secret_args.contains(&a.as_str()) {
+            hide_next = true;
+            shown.push(a.clone());
+        } else if let Some((flag, value)) = a.split_once('=').filter(|(f, _)| secret_args.contains(f)) {
+            secrets.push(value.to_owned());
+            shown.push(format!("{flag}={HIDDEN}"));
+        } else {
+            shown.push(a.clone());
+        }
+    }
+    (shown, secrets)
 }
 
 /// A command is about to exit with an error: log `reason` at error (so the log holds why), then
@@ -495,6 +552,34 @@ mod tests {
         assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(true));
         assert!(open(&dir, "app").is_err(), "a FIFO is never the log");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn secret_arguments_show_as_stars_wherever_they_appear() {
+        let args: Vec<String> =
+            ["prog", "--token", "s3cr3t", "--token=0th3r", "--name", "s3cr3t-ish", "--token"].iter().map(|s| (*s).to_owned()).collect();
+        let (shown, secrets) = mask_args(&args, &["--token"]);
+        assert_eq!(shown.join(" "), "prog --token *** --token=*** --name s3cr3t-ish --token");
+        assert_eq!(secrets, ["s3cr3t", "0th3r"]);
+        assert_eq!(mask_args(&args, &[]).0, args, "nothing is secret unless named");
+        let dir = temp_dir("secret");
+        let l = CliLogger::new(Filter::parse("info"), true, false, open(&dir, "app").ok()).with_secrets(secrets);
+        rec(&l, log::Level::Error, "app", "login failed for s3cr3t (0th3r)");
+        l.flush();
+        let text = std::fs::read_to_string(dir.join("app-cli.log")).unwrap();
+        assert!(text.contains("\"msg\":\"login failed for *** (***)\"") && !text.contains("s3cr3t") && !text.contains("0th3r"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_non_unicode_argument_is_shown_lossily() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let arg = std::ffi::OsString::from_vec(vec![b'a', 0xff, b'b']);
+            let args = vec!["prog".to_owned(), arg.to_string_lossy().into_owned()];
+            assert_eq!(mask_args(&args, &["--token"]).0.join(" "), "prog a\u{fffd}b");
+        }
     }
 
     #[test]

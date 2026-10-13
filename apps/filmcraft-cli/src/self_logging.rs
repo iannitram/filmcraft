@@ -18,6 +18,10 @@ mod report;
 pub const APP: craft_log::App =
     craft_log::App { name: "filmcraft", version: env!("CARGO_PKG_VERSION"), ours: "filmcraft*", default_filter: "warn,filmcraft*=info" };
 
+/// Arguments whose values are never logged: none today (no filmcraft-cli argument carries a
+/// secret; `--bridge` is an address).
+const SECRET_ARGS: &[&str] = &[];
+
 fn data_dir(given: Option<&str>) -> Option<PathBuf> {
     given.map(PathBuf::from).or_else(filmcraft_engine::autosave::default_data_dir)
 }
@@ -25,7 +29,7 @@ fn data_dir(given: Option<&str>) -> Option<PathBuf> {
 /// Start this run's log (after `--help` and `--version`, which leave no trace).
 pub fn install(given: Option<&str>) {
     let dir = data_dir(given).map(|d| d.join(report::LOG_DIR));
-    let _ = craft_log::cli::install(&APP, dir.as_deref());
+    let _ = craft_log::cli::install(&APP, dir.as_deref(), SECRET_ARGS);
 }
 
 /// The run is about to exit with an error: log why, and point at the log.
@@ -42,7 +46,7 @@ pub fn diagnostics(given: Option<&str>, json: bool) -> String {
     report::video(&mut r);
     r.add("screens", "screens", "unknown (no window)");
     report::folders(&mut r, data.as_deref());
-    r.add_switches(report::SWITCH_PREFIXES);
+    r.add_switches(report::SWITCH_PREFIXES, report::SECRET_SWITCHES);
     r.add_helpers();
     // the window app's newest log is its last run (or the one running now)
     let window_log = data.as_deref().map(|d| d.join(report::LOG_DIR).join(report::LOG_FILE));
