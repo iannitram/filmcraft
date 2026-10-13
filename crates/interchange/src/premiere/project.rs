@@ -399,6 +399,27 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                             }
                         }
                     }
+                    // A graphic kept in the project (a title that a newer version "upgraded" is
+                    // one) has its text layers on its master clip, shared by every clip made from
+                    // it; the clip's own chain holds only its place. A master clip that cannot be
+                    // followed leaves the clip as it was.
+                    if generated
+                        && layers.is_empty()
+                        && kind == TrackKind::Video
+                        && let Some(master) = at(sub, &["MasterClip"]).and_then(|reference| self.graph.resolve(reference).ok())
+                        && let Some(chain) = at(master, &["VideoComponentChain"]).and_then(|reference| self.graph.resolve(reference).ok())
+                        && let Ok(components) = self.graph.references(chain, &["ComponentChain", "Components"])
+                    {
+                        for component in components {
+                            if child_text(component, "MatchName") == Some(text::MATCH_NAME) {
+                                let root = self.graph.root;
+                                let shared = self.shared_values.get_or_insert_with(|| text::shared_values(root, "StartKeyframeValue"));
+                                if let Some(layer) = text::layer(&self.graph, component, Tick::ZERO, sequence_size, shared, self.report)? {
+                                    layers.push(layer);
+                                }
+                            }
+                        }
+                    }
                     // a title made in the Title Designer: its text layers come from its source
                     if generated
                         && layers.is_empty()
