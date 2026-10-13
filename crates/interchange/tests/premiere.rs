@@ -1049,6 +1049,12 @@ fn put_value(out: &mut Vec<u8>, field: &Field) -> usize {
 /// A Source Text value as project versions 40 to 43 write it: the byte length, four zero bytes,
 /// the marker, then the tables. Two runs ("Two " and "fonts"), two fonts, the second run smaller.
 fn source_text_binary() -> Vec<u8> {
+    source_text_binary_with_shadow_distance(Some(10.0))
+}
+
+/// [`source_text_binary`] with the shadow's distance as given; `None` leaves the field out, as
+/// the file does for a value at its default.
+fn source_text_binary_with_shadow_distance(distance: Option<f32>) -> Vec<u8> {
     use Field::*;
     let black = || Table(vec![Byte(0), Byte(0), Byte(0)]);
     let style = |size: f32| Table(vec![Number(1), Float(size), Table(vec![Byte(236), Byte(246)]), Absent, black(), Byte(1), Float(4.0)]);
@@ -1057,8 +1063,12 @@ fn source_text_binary() -> Vec<u8> {
         List(vec![Words("ExampleSans-Regular"), Words("ExampleSerif-Bold")]),
     ];
     text.extend([Absent, Absent, Number(1)]);
-    text.extend([Absent, Absent, Absent, Absent, Absent]);
-    text.extend([black(), Byte(1), Float(50.0), Absent, Float(10.0), Absent, Float(30.0)]);
+    // 6 the leading
+    text.extend([Absent, Float(-12.5), Absent, Absent, Absent]);
+    // 10 to 16 the shadow: colour, shown, opacity, angle, distance, size, blur
+    text.extend([black(), Byte(1), Float(50.0), Float(-205.0), distance.map_or(Absent, Float), Float(3.0), Float(30.0)]);
+    // 17 to 20 the background: colour, shown, opacity, size
+    text.extend([Table(vec![Byte(16), Byte(32), Byte(48)]), Byte(1), Float(100.0), Float(28.75)]);
     let mut tables = vec![0u8; 4];
     let root = put_table(&mut tables, &[Table(text)]);
     tables[..4].copy_from_slice(&(root as u32).to_le_bytes());
@@ -1102,15 +1112,30 @@ fn premiere_text_in_the_binary_form_becomes_a_text_layer() {
     assert!(matches!(layer.param("stroke_color").unwrap().value, ParamValue::Color(c) if c == [0.0, 0.0, 0.0, 1.0]));
     assert!(matches!(layer.param("shadow").unwrap().value, ParamValue::Bool(true)));
     assert!(matches!(layer.param("shadow_color").unwrap().value, ParamValue::Color(c) if c == [0.0, 0.0, 0.0, 1.0]));
-    assert_eq!(
-        (layer.f64_at("shadow_opacity", Tick::ZERO), layer.f64_at("shadow_distance", Tick::ZERO), layer.f64_at("shadow_angle", Tick::ZERO)),
-        (50.0, 10.0, 30.0)
+    let number = |id: &str| layer.f64_at(id, Tick::ZERO);
+    assert_eq!((number("shadow_opacity"), number("shadow_angle"), number("shadow_distance")), (50.0, -205.0, 10.0));
+    assert_eq!((number("shadow_size"), number("shadow_blur")), (3.0, 30.0), "the blur is field 16, the angle field 13");
+    assert_eq!(number("leading"), -12.5);
+    assert!(matches!(layer.param("background").unwrap().value, ParamValue::Bool(true)));
+    assert!(
+        matches!(layer.param("background_color").unwrap().value, ParamValue::Color(c) if c == [16.0 / 255.0, 32.0 / 255.0, 48.0 / 255.0, 1.0]),
+        "{:?}",
+        layer.param("background_color")
     );
+    assert_eq!((number("background_opacity"), number("background_size")), (100.0, 28.75));
     assert_eq!(layer.vec2_at("position", Tick::ZERO), Vec2::new(480.0, 540.0));
     // "fonts", the second run, is smaller: a style run over its five characters
     let runs = &layer.layer.as_ref().expect("a style run").runs;
     assert_eq!(runs.len(), 1, "{runs:?}");
     assert_eq!((runs[0].start, runs[0].end, runs[0].style.size), (4, 9, Some(40.0)));
+
+    // A value at its default is not written. The shadow's distance is 7 there and 10 here, so a
+    // shadow that is shown without a distance gets the 7 it had.
+    let xml = project_with_text_layer(&source_text_binary_with_shadow_distance(None));
+    let (imported, _) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+    let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+    let layer = video.graphic_layers().next().expect("a text layer");
+    assert_eq!(layer.f64_at("shadow_distance", Tick::ZERO), 7.0);
 }
 
 /// Every number in the binary form comes from the file: cut short anywhere, or with any byte
