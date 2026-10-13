@@ -82,6 +82,7 @@ const LAYERS: &[(&str, u8)] = &[
     ("format", 3),
     ("engine", 4),
     ("platform", 5),
+    ("craft-log", 5), // ours (self-logging), not upstream
     ("ui-egui", 5),
     ("automation", 5),
     ("filmcraft", 6),
