@@ -30,7 +30,8 @@ fn no_hardware_switches_hardware_decoding_off() {
 /// `FILMCRAFT_NO_HARDWARE` in the environment is `--no-hardware` for every run that inherits it.
 #[test]
 fn no_hardware_from_the_environment() {
-    let o = Command::new(env!("CARGO_BIN_EXE_filmcraft-cli")).args(["exec", "perf.stats"]).env("FILMCRAFT_NO_HARDWARE", "1").output().expect("spawn filmcraft-cli");
+    let o =
+        Command::new(env!("CARGO_BIN_EXE_filmcraft-cli")).args(["exec", "perf.stats"]).env("FILMCRAFT_NO_HARDWARE", "1").output().expect("spawn filmcraft-cli");
     let v = json_out(&o);
     assert_eq!(v["decode"]["hardware"]["enabled"], false, "{v}");
     assert!(v["decode"]["hardware"]["backend"].is_null(), "no OS decoder is registered: {v}");
