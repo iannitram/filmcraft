@@ -6,6 +6,7 @@
 
 mod effects;
 mod graph;
+mod legacy_title;
 mod presets;
 mod project;
 mod text;

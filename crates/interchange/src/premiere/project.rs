@@ -7,6 +7,7 @@ use roxmltree::Node;
 
 use super::effects;
 use super::graph::{Graph, PROJECT, at, decode, error, key, parse, text_at};
+use super::legacy_title;
 use super::text;
 use crate::common::{Builder, MediaSpec, empty_sequence, kind_from_ext, rate_from_f64, resolve_path, settings_for};
 use crate::xml::{child_text, elements};
@@ -30,6 +31,8 @@ pub fn import_project(bytes: &[u8], opts: &ImportOptions) -> Result<(Imported, R
         generated: HashSet::new(),
         canvases: Vec::new(),
         shared_values: None,
+        titles: HashMap::new(),
+        shared_titles: None,
         report: &mut report,
     };
     let project = elements(importer.graph.root)
@@ -87,6 +90,10 @@ struct Importer<'a, 'i, 'o, 'r> {
     canvases: Vec<((u32, u32, FrameRate), ItemId)>,
     /// Binary parameter values by their hash, gathered when the first text layer is met.
     shared_values: Option<HashMap<&'a str, &'a str>>,
+    /// The titles made in the Title Designer, by the source item each one is.
+    titles: HashMap<ItemId, legacy_title::Title>,
+    /// Title values by their hash, gathered when the first title written by its hash is met.
+    shared_titles: Option<HashMap<&'a str, &'a str>>,
     report: &'r mut Report,
 }
 
@@ -182,6 +189,17 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
             let kind = child_text(media, "Title").filter(|t| !t.is_empty()).unwrap_or("generated media");
             let id = self.offline_source(&media_key, name, &shortened(kind, 120), bin);
             self.generated.insert(id);
+            // a title made in the Title Designer carries its own document
+            if let Some(prefs) = media.children().find(|n| n.has_tag_name(legacy_title::PREFS)) {
+                let root = self.graph.root;
+                let value = prefs.text().filter(|text| !text.trim().is_empty()).or_else(|| {
+                    let shared = self.shared_titles.get_or_insert_with(|| text::shared_values(root, legacy_title::PREFS));
+                    prefs.attribute("BinaryHash").and_then(|hash| shared.get(hash).copied())
+                });
+                if let Some(title) = value.and_then(|value| legacy_title::read(value, self.report)).filter(|title| !title.is_empty()) {
+                    self.titles.insert(id, title);
+                }
+            }
             return Ok(id);
         }
         let path = resolve_path(path, self.opts.base_dir.as_deref());
@@ -344,7 +362,7 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                             // a text layer of a graphic made inside the application
                             if generated && child_text(component, "MatchName") == Some(text::MATCH_NAME) {
                                 let root = self.graph.root;
-                                let shared = self.shared_values.get_or_insert_with(|| text::shared_values(root));
+                                let shared = self.shared_values.get_or_insert_with(|| text::shared_values(root, "StartKeyframeValue"));
                                 if let Some(layer) = text::layer(&self.graph, component, Tick::ZERO, sequence_size, shared, self.report)? {
                                     layers.push(layer);
                                     continue;
@@ -362,6 +380,14 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                                 effects::put_effect(&mut imported.effects, effect);
                             }
                         }
+                    }
+                    // a title made in the Title Designer: its text layers come from its source
+                    if generated
+                        && layers.is_empty()
+                        && kind == TrackKind::Video
+                        && let Some(title) = self.titles.get(&source_item)
+                    {
+                        layers = title.layers_in(sequence_size);
                     }
                     // An offline placeholder on an upper track would cover the picture under it
                     // for as long as the title lasted: keep the clip where it is, switched off.
