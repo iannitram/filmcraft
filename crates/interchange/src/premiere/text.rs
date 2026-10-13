@@ -218,6 +218,27 @@ pub(super) fn layer(
     Ok(Some(layer))
 }
 
+/// Draw a text layer's letters for a sequence whose pixels have the aspect `par`. A text layer is
+/// drawn in the sequence's own pixels; where those are not square (40:33 in a 720x480 widescreen
+/// sequence) the letters would be that much too wide once the frame is shown. The layer's width
+/// scale is divided by the pixel's width, as a title from the Title Designer is treated
+/// (`legacy_title`); its height and its place stay. Square pixels change nothing.
+pub(super) fn fit_pixels(layer: &mut EffectInstance, par: (u32, u32)) {
+    if par.0 == 0 || par.1 == 0 || par.0 == par.1 {
+        return;
+    }
+    let pixel = f64::from(par.0) / f64::from(par.1);
+    // one scale for both directions (the usual case), or a width of its own already
+    let uniform = !matches!(layer.params.get("uniform_scale").map(|p| &p.value), Some(ParamValue::Bool(false)));
+    let Some(mut width) = layer.params.get(if uniform { "scale" } else { "scale_width" }).cloned() else { return };
+    width.map_values(|value| match value {
+        ParamValue::Float(v) => ParamValue::Float(v / pixel),
+        other => other,
+    });
+    layer.params.insert("scale_width".to_string(), width);
+    layer.params.insert("uniform_scale".to_string(), Param::new(ParamValue::Bool(false)));
+}
+
 /// The binary values in the `tag` elements of a document by their `BinaryHash`: the file writes
 /// a value in full the first time and leaves the element empty, with the same hash, every time
 /// after.

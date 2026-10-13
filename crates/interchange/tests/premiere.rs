@@ -1426,6 +1426,36 @@ fn premiere_legacy_title_for_widescreen_pixels_keeps_its_shape() {
     assert!(matches!(layer.param("uniform_scale").unwrap().value, ParamValue::Bool(true)), "letters as they are");
 }
 
+/// Text typed in a graphic is drawn in the sequence's own pixels. Where those are not square (a
+/// 720x480 widescreen sequence, 40:33) its letters are drawn that much narrower, as a title from
+/// the Title Designer is, so they have their shape when the frame is shown. The layer's place
+/// and its height stay; square pixels change nothing.
+#[test]
+fn premiere_text_in_a_sequence_of_widescreen_pixels_keeps_its_shape() {
+    use filmcraft_project::ParamValue;
+    let square = project_with_text_layer(&source_text_json(TITLE_JSON));
+    let wide = square.replace(
+        "<VideoTrackGroup ObjectID=\"30\"><FrameRect>0,0,1920,1080</FrameRect>",
+        "<VideoTrackGroup ObjectID=\"30\"><FrameRect>0,0,720,480</FrameRect><PixelAspectRatio>40,33</PixelAspectRatio>",
+    );
+    assert!(wide.contains("40,33"));
+    let first_layer = |xml: &str| {
+        let (imported, _) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+        let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+        video.graphic_layers().next().expect("a text layer").clone()
+    };
+    let layer = first_layer(&wide);
+    assert_eq!(layer.vec2_at("position", Tick::ZERO), Vec2::new(180.0, 240.0), "a quarter across and half-way down, as before");
+    assert!(matches!(layer.param("uniform_scale").unwrap().value, ParamValue::Bool(false)));
+    assert_eq!(layer.f64_at("scale", Tick::ZERO), 50.0, "the height it had");
+    let width = layer.f64_at("scale_width", Tick::ZERO);
+    assert!((width - 50.0 * 33.0 / 40.0).abs() < 0.01, "narrower by the pixel's width: {width}");
+    // square pixels: as it was
+    let layer = first_layer(&square);
+    assert!(matches!(layer.param("uniform_scale").unwrap().value, ParamValue::Bool(true)));
+    assert_eq!(layer.f64_at("scale", Tick::ZERO), 50.0);
+}
+
 /// A graphic kept in the project has its text layers on its master clip, not on the clips made
 /// from it: a clip whose own chain has no text takes the master's.
 #[test]
