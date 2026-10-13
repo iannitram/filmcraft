@@ -16,20 +16,33 @@ use crate::collapse::{self, Collapser};
 use crate::filter::{self, Filter};
 use crate::line::{Line, timestamp};
 
-/// The command-line log stops growing past this size; at the next run it becomes `<app>-cli.1.log`.
+/// The command-line log's cap: past it a run writes only error lines; at the next run it becomes
+/// `<app>-cli.1.log`.
 pub const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
+/// A run starts a new file when the log has less room left than this, so the `log:` line of a
+/// failing run points at a file that holds its lines.
+pub const RUN_ROOM_BYTES: u64 = 64 * 1024;
+/// Past the cap, error lines are still written, up to this much more (an error flood cannot fill
+/// the disk).
+pub const ERROR_ROOM_BYTES: u64 = 1024 * 1024;
+
+/// Whether a log of `len` bytes has too little room for another run.
+pub fn too_full(len: u64) -> bool {
+    len > MAX_FILE_BYTES - RUN_ROOM_BYTES
+}
 
 /// `<app>-cli.log`
 pub fn file_name(app: &str) -> String {
     format!("{app}-cli.log")
 }
 
-/// Open `<dir>/<app>-cli.log` for appending, first moving a full one to `<app>-cli.1.log`
-/// (replacing the older one). Returns the path, the file and the bytes already in it.
+/// Open `<dir>/<app>-cli.log` for appending, first moving one without room for a run
+/// ([`too_full`]) to `<app>-cli.1.log` (replacing the older one). Returns the path, the file and
+/// the bytes already in it.
 pub fn open(dir: &Path, app: &str) -> std::io::Result<(PathBuf, File, u64)> {
     std::fs::create_dir_all(dir)?;
     let path = dir.join(file_name(app));
-    if std::fs::metadata(&path).is_ok_and(|m| m.len() >= MAX_FILE_BYTES) {
+    if std::fs::metadata(&path).is_ok_and(|m| too_full(m.len())) {
         // Several runs may race here; whichever rename wins, a fresh file follows.
         let _ = std::fs::rename(&path, dir.join(format!("{app}-cli.1.log")));
     }
@@ -86,6 +99,8 @@ pub(crate) fn nonblocking(_: &mut OpenOptions) {}
 struct Out {
     file: Option<File>,
     written: u64,
+    /// The cap was reached and said so: only error lines from here.
+    capped: bool,
 }
 
 /// The installed command-line logger.
@@ -105,7 +120,7 @@ impl CliLogger {
             Some((p, f, w)) => (Some(p), Some(f), w),
             None => (None, None, 0),
         };
-        CliLogger { filter, json, stderr, path, out: Mutex::new(Out { file, written }), collapse: Mutex::new(Collapser::default()) }
+        CliLogger { filter, json, stderr, path, out: Mutex::new(Out { file, written, capped: false }), collapse: Mutex::new(Collapser::default()) }
     }
 
     /// The log file, when there is one.
@@ -124,21 +139,29 @@ impl CliLogger {
         }
         let mut out = self.out.lock().unwrap_or_else(PoisonError::into_inner);
         let len = u64::try_from(formatted.len()).unwrap_or(u64::MAX);
-        let note =
-            (out.written.saturating_add(len) > MAX_FILE_BYTES).then(|| format!("log file reached {MAX_FILE_BYTES} bytes; the next run starts a new one\n"));
-        let Some(file) = out.file.as_mut() else { return };
-        if let Some(n) = note {
-            // capped: say so once and stop writing, never fail the command
-            let _ = file.write_all(n.as_bytes());
-            out.file = None;
-            return;
+        let end = out.written.saturating_add(len);
+        let Out { file, written, capped } = &mut *out;
+        let Some(f) = file.as_mut() else { return };
+        if end > MAX_FILE_BYTES {
+            // capped: say so once, then write only errors (the reason a command failed must be in
+            // the file its `log:` line names), up to ERROR_ROOM_BYTES more; never fail the command
+            if !*capped {
+                *capped = true;
+                let note = format!("log file reached {MAX_FILE_BYTES} bytes; only errors are written from here, and the next run starts a new one\n");
+                if f.write_all(note.as_bytes()).is_ok() {
+                    *written = written.saturating_add(u64::try_from(note.len()).unwrap_or(u64::MAX));
+                }
+            }
+            if level != log::Level::Error || written.saturating_add(len) > MAX_FILE_BYTES + ERROR_ROOM_BYTES {
+                return;
+            }
         }
         // One write per line, so lines from concurrent runs appending to the same file stay whole.
-        if file.write_all(formatted.as_bytes()).is_ok() {
-            out.written = out.written.saturating_add(len);
+        if f.write_all(formatted.as_bytes()).is_ok() {
+            *written = written.saturating_add(len);
         } else {
             // a full disk or a vanished file: stop writing, never fail the command
-            out.file = None;
+            *file = None;
         }
     }
 
@@ -287,6 +310,37 @@ mod tests {
         let (path, _, len) = open(&dir, "app").unwrap();
         assert_eq!((path, len), (full, 0));
         assert_eq!(std::fs::metadata(dir.join("app-cli.1.log")).unwrap().len(), MAX_FILE_BYTES);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_log_without_room_for_a_run_moves_aside_at_open() {
+        let dir = temp_dir("room");
+        std::fs::create_dir_all(&dir).unwrap();
+        let nearly = dir.join("app-cli.log");
+        std::fs::File::create(&nearly).unwrap().set_len(MAX_FILE_BYTES - 1000).unwrap();
+        let (path, _, len) = open(&dir, "app").unwrap();
+        assert_eq!((path, len), (nearly, 0), "a run with 1000 bytes of room starts a new file");
+        assert_eq!(std::fs::metadata(dir.join("app-cli.1.log")).unwrap().len(), MAX_FILE_BYTES - 1000);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_error_line_is_written_past_the_cap() {
+        let dir = temp_dir("cap");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("app-cli.log");
+        let file = open_append(&path).unwrap();
+        // as if the run had already written up to 10 bytes short of the cap
+        let l = CliLogger::new(Filter::parse("warn,app=debug"), false, false, Some((path.clone(), file, MAX_FILE_BYTES - 10)));
+        rec(&l, log::Level::Warn, "app", "a warning that does not fit");
+        rec(&l, log::Level::Info, "app", "neither does this");
+        rec(&l, log::Level::Error, "app", "the reason the command failed");
+        l.flush();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("the reason the command failed"), "the log: line must point at a file holding the error: {text}");
+        assert!(!text.contains("a warning that does not fit") && !text.contains("neither does this"), "{text}");
+        assert!(text.contains(&format!("log file reached {MAX_FILE_BYTES} bytes")), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
