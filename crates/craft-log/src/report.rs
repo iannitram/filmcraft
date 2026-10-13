@@ -52,7 +52,7 @@ impl Report {
         let mut r = Report::empty();
         r.add("app", "name", app.name);
         r.add("app", "version", app.version);
-        r.add("app", "commit", crate::BUILD_COMMIT);
+        r.add("app", "commit", format!("{}{}", crate::BUILD_COMMIT, crate::BUILD_TREE));
         r.add("app", "build profile", crate::BUILD_PROFILE);
         r.add("app", "built on", crate::BUILD_DATE);
         r.add("app", "runs from", std::env::current_exe().map(|p| mask_home(&p.display().to_string())).unwrap_or_default());
