@@ -107,16 +107,40 @@ pub(super) struct Graph<'a, 'i> {
     pub format: &'static str,
     objects: HashMap<String, Node<'a, 'i>>,
     work_left: Cell<usize>,
+    /// Element names of objects defined a second time under an id already taken (the first
+    /// definition is the one references resolve to), at most 64 of them.
+    pub duplicates: Vec<String>,
+}
+
+/// What to do with an object whose id is already taken.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Duplicates {
+    Reject,
+    /// Real project files hold the odd `Media` object twice under one `ObjectUID`; the
+    /// application that wrote them opens them. Keep the first and list the rest.
+    KeepFirst,
 }
 
 impl<'a, 'i> Graph<'a, 'i> {
-    pub fn new(root: Node<'a, 'i>, format: &'static str) -> Result<Self> {
+    pub fn new(root: Node<'a, 'i>, format: &'static str, on_duplicate: Duplicates) -> Result<Self> {
         let mut objects = HashMap::new();
+        let mut duplicates = Vec::new();
         for n in elements(root) {
             for (field, prefix) in [("ObjectID", "i:"), ("ObjectUID", "u:")] {
                 if let Some(id) = n.attribute(field) {
-                    if id.is_empty() || objects.insert(format!("{prefix}{id}"), n).is_some() {
-                        return Err(error(format, format!("empty or duplicate {field} `{id}`")));
+                    if id.is_empty() {
+                        return Err(error(format, format!("empty {field}")));
+                    }
+                    match objects.entry(format!("{prefix}{id}")) {
+                        std::collections::hash_map::Entry::Vacant(slot) => {
+                            slot.insert(n);
+                        }
+                        std::collections::hash_map::Entry::Occupied(_) if on_duplicate == Duplicates::KeepFirst => {
+                            if duplicates.len() < 64 {
+                                duplicates.push(n.tag_name().name().to_string());
+                            }
+                        }
+                        std::collections::hash_map::Entry::Occupied(_) => return Err(error(format, format!("duplicate {field} `{id}`"))),
                     }
                     if objects.len() > MAX_OBJECTS {
                         return Err(error(format, format!("object graph exceeds the {MAX_OBJECTS} object limit")));
@@ -124,7 +148,7 @@ impl<'a, 'i> Graph<'a, 'i> {
                 }
             }
         }
-        Ok(Self { root, format, objects, work_left: Cell::new(MAX_WORK) })
+        Ok(Self { root, format, objects, work_left: Cell::new(MAX_WORK), duplicates })
     }
 
     pub fn charge(&self) -> Result<()> {

@@ -398,3 +398,65 @@ fn premiere_gaussian_blur_checkbox_sharing_the_blurriness_id_is_told_apart() {
     assert_eq!(blur.f64_at("blurriness", Tick::ZERO), 24.0);
     assert_eq!(blur.param("repeat_edge").map(|p| p.value.clone()), Some(filmcraft_project::ParamValue::Bool(true)));
 }
+
+#[test]
+fn premiere_clip_that_starts_before_its_media_is_trimmed_not_refused() {
+    // sound slipped a second ahead of its file: source range -1 s .. 1 s on a two-second clip
+    let slipped = project_xml().replace(
+        &format!("<AudioClip ObjectID=\"70\"><Clip><Source ObjectRef=\"23\"/><InPoint>{}</InPoint><OutPoint>{}</OutPoint>", 5 * TPS, 7 * TPS),
+        &format!("<AudioClip ObjectID=\"70\"><Clip><Source ObjectRef=\"23\"/><InPoint>{}</InPoint><OutPoint>{}</OutPoint>", -TPS, TPS),
+    );
+    assert_ne!(slipped, project_xml());
+    let (imported, report) = premiere::import_project(slipped.as_bytes(), &ImportOptions::default()).unwrap();
+    assert!(report.to_string().contains("starts before its media"), "{report}");
+    let sequence = imported.project.sequence(imported.sequences[0]).unwrap();
+    let audio = &sequence.audio_tracks[0].items[0];
+    assert_eq!((audio.start, audio.duration, audio.source_in), (Tick(TPS), Tick(TPS), Tick::ZERO));
+    assert_eq!(audio.speed, 1.0);
+    // the picture it is linked to is untouched, and still linked
+    let video = &sequence.video_tracks[0].items[0];
+    assert_eq!((video.start, video.duration, video.source_in), (Tick::ZERO, Tick(2 * TPS), Tick(5 * TPS)));
+    assert_eq!(video.link, audio.link);
+    // a range that lies wholly before the media, or runs backwards, is still refused
+    for (source_in, source_out) in [(-2 * TPS, -TPS), (-TPS, 0), (7 * TPS, 5 * TPS)] {
+        let bad = project_xml().replace(
+            &format!("<AudioClip ObjectID=\"70\"><Clip><Source ObjectRef=\"23\"/><InPoint>{}</InPoint><OutPoint>{}</OutPoint>", 5 * TPS, 7 * TPS),
+            &format!("<AudioClip ObjectID=\"70\"><Clip><Source ObjectRef=\"23\"/><InPoint>{source_in}</InPoint><OutPoint>{source_out}</OutPoint>"),
+        );
+        assert!(premiere::import_project(bad.as_bytes(), &ImportOptions::default()).is_err(), "{source_in}..{source_out}");
+    }
+}
+
+#[test]
+fn premiere_media_with_a_time_base_for_a_frame_rate_does_not_refuse_the_project() {
+    // 2822400 ticks is 1/90000 s: the file's time base, stored where a frame duration belongs
+    let xml = project_xml().replace("<VideoStream ObjectID=\"40\"><FrameRate>10594584000</FrameRate>", "<VideoStream ObjectID=\"40\"><FrameRate>2822400</FrameRate>");
+    assert_ne!(xml, project_xml());
+    let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+    assert!(report.to_string().contains("frame duration FilmCraft cannot use (2822400 ticks)"), "{report}");
+    let sequence = imported.project.sequence(imported.sequences[0]).unwrap();
+    assert_eq!(sequence.settings.frame_rate, FrameRate::FPS_23_976, "the sequence keeps its own rate");
+    let media = imported.project.item(sequence.video_tracks[0].items[0].item).unwrap().as_media().unwrap();
+    assert_eq!(media.info.video.as_ref().map(|v| v.frame_rate), Some(FrameRate::FPS_24));
+    // a sequence with such a rate is a different matter: still refused
+    let bad = project_xml().replace("<TrackGroup><FrameRate>10594584000</FrameRate>", "<TrackGroup><FrameRate>2822400</FrameRate>");
+    assert_ne!(bad, project_xml());
+    assert!(premiere::import_project(bad.as_bytes(), &ImportOptions::default()).is_err());
+}
+
+#[test]
+fn premiere_project_with_an_object_defined_twice_uses_the_first() {
+    let twice = project_xml().replace(
+        "</PremiereData>",
+        "<Media ObjectUID=\"movie\"><FilePath>/media/second-definition.mov</FilePath><VideoStream ObjectRef=\"40\"/></Media></PremiereData>",
+    );
+    let (imported, report) = premiere::import_project(twice.as_bytes(), &ImportOptions::default()).unwrap();
+    assert!(report.to_string().contains("Media is defined twice"), "{report}");
+    let sequence = imported.project.sequence(imported.sequences[0]).unwrap();
+    let media = imported.project.item(sequence.video_tracks[0].items[0].item).unwrap().as_media().unwrap();
+    assert!(matches!(&media.media, filmcraft_project::MediaRef::File { path } if path == "/media/example.mov"));
+    // an empty id is no id: still refused, and so is a preset file with a repeated id
+    assert!(premiere::import_project(project_xml().replace("ObjectUID=\"movie\"", "ObjectUID=\"\"").as_bytes(), &ImportOptions::default()).is_err());
+    let preset_twice = preset_xml(0).replace("</PremiereData>", "<TreeItem ObjectID=\"1\"><TreeItemBase><Name>Again</Name></TreeItemBase></TreeItem></PremiereData>");
+    assert!(premiere::import_presets(preset_twice.as_bytes()).is_err());
+}
