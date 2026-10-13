@@ -187,8 +187,17 @@ fn many_runs_at_once_on_a_full_log_lose_nothing() {
         let full_len = body.len() as u64;
         let start = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap() + Duration::from_millis(1500);
         let start = start.as_millis().to_string();
-        let children: Vec<_> =
-            (0..RUNS).map(|n| me("run", &dir).env("CRAFT_LOG_TEST_TAG", format!("r{round}-n{n}")).env("CRAFT_LOG_TEST_START_AT", &start).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap()).collect();
+        let children: Vec<_> = (0..RUNS)
+            .map(|n| {
+                me("run", &dir)
+                    .env("CRAFT_LOG_TEST_TAG", format!("r{round}-n{n}"))
+                    .env("CRAFT_LOG_TEST_START_AT", &start)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap()
+            })
+            .collect();
         for mut c in children {
             assert_eq!(wait_at_most(&mut c, Duration::from_secs(30)).and_then(|s| s.code()), Some(0));
         }

@@ -556,8 +556,7 @@ mod tests {
 
     #[test]
     fn secret_arguments_show_as_stars_wherever_they_appear() {
-        let args: Vec<String> =
-            ["prog", "--token", "s3cr3t", "--token=0th3r", "--name", "s3cr3t-ish", "--token"].iter().map(|s| (*s).to_owned()).collect();
+        let args: Vec<String> = ["prog", "--token", "s3cr3t", "--token=0th3r", "--name", "s3cr3t-ish", "--token"].iter().map(|s| (*s).to_owned()).collect();
         let (shown, secrets) = mask_args(&args, &["--token"]);
         assert_eq!(shown.join(" "), "prog --token *** --token=*** --name s3cr3t-ish --token");
         assert_eq!(secrets, ["s3cr3t", "0th3r"]);
