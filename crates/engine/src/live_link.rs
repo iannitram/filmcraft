@@ -46,6 +46,64 @@ pub fn find_cli() -> Option<PathBuf> {
     Some(PathBuf::from(home).join("Applications").join("craft").join(exe)).filter(|p| p.is_file())
 }
 
+/// The EffectCraft app: `FILMCRAFT_EFFECTCRAFT_APP`, else `effectcraft` on `PATH`, else beside
+/// the command line ([`find_cli`]), else `~/Applications/craft/effectcraft.AppImage`.
+pub fn find_app() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("FILMCRAFT_EFFECTCRAFT_APP").filter(|p| !p.is_empty()) {
+        return Some(PathBuf::from(p));
+    }
+    let exe = if cfg!(windows) { "effectcraft.exe" } else { "effectcraft" };
+    if let Some(found) = std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).map(|d| d.join(exe)).find(|p| p.is_file())) {
+        return Some(found);
+    }
+    if let Some(beside) = find_cli().map(|c| c.with_file_name(exe)).filter(|p| p.is_file()) {
+        return Some(beside);
+    }
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })?;
+    Some(PathBuf::from(home).join("Applications").join("craft").join("effectcraft.AppImage")).filter(|p| p.is_file())
+}
+
+/// Item `id`'s link: (the .ecproj, the comp id).
+pub fn link_of(p: &filmcraft_project::Project, id: ItemId) -> Option<(String, String)> {
+    let m = &p.items.get(&id)?.metadata;
+    Some((m.get(PROJECT)?.clone(), m.get(COMP_ID)?.clone()))
+}
+
+/// Open item `id`'s comp in EffectCraft (`--comp`), or leave the copy this session started for
+/// that project to the user when it is still running (no second EffectCraft).
+pub fn open_in_effectcraft(s: &mut Session, id: ItemId) -> Result<Value> {
+    let (ecproj, comp) = link_of(&s.project, id).ok_or_else(|| EngineError::Other("not a linked EffectCraft composition".into()))?;
+    if let Some(child) = s.link_editors.get_mut(&ecproj)
+        && matches!(child.try_wait(), Ok(None))
+    {
+        return Ok(json!({"project": ecproj, "comp": comp, "running": true}));
+    }
+    let app = find_app().ok_or_else(|| EngineError::Other("EffectCraft was not found: set FILMCRAFT_EFFECTCRAFT_APP".into()))?;
+    let child = Command::new(&app)
+        .args(["--comp", &comp, &ecproj])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| EngineError::Other(format!("{}: {e}", app.display())))?;
+    log::info!("decision: link: opened {ecproj} comp {comp} in EffectCraft ({})", app.display());
+    s.link_editors.insert(ecproj.clone(), child);
+    Ok(json!({"project": ecproj, "comp": comp, "running": false}))
+}
+
+/// Ours: Edit ▸ Edit Original on linked clips opens their comps in EffectCraft; other clips' files
+/// go to the frontend as before.
+pub(crate) fn edit_original_or_open(s: &mut Session, p: &Value, others: fn(&mut Session, &Value) -> Result<Value>) -> Result<Value> {
+    let ids: Vec<ItemId> = crate::project_tools::target_items(s, p).into_iter().filter(|i| link_of(&s.project, *i).is_some()).collect();
+    if ids.is_empty() {
+        return others(s, p);
+    }
+    for id in &ids {
+        open_in_effectcraft(s, *id)?;
+    }
+    Ok(json!({"paths": [], "effectcraft": ids.iter().map(|i| i.0).collect::<Vec<_>>()}))
+}
+
 /// The comp in an .ecproj's text named by `comp` (an id, else a name): (id, name).
 pub fn find_comp(ecproj_text: &str, comp: &str) -> Option<(u64, String)> {
     let doc: Value = serde_json::from_str(ecproj_text).ok()?;
@@ -296,6 +354,19 @@ pub fn commands() -> Vec<crate::commands::CommandSpec> {
             enabled: always,
             run: add,
             journal: true,
+        },
+        CommandSpec {
+            id: "link.openInEffectCraft",
+            label: "Edit in EffectCraft",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"item":id}"#,
+            enabled: always,
+            run: |s, p| {
+                let id = p.get("item").and_then(Value::as_u64).map(ItemId).ok_or_else(|| EngineError::Other("link.openInEffectCraft: need `item`".into()))?;
+                open_in_effectcraft(s, id)
+            },
+            journal: false,
         },
         CommandSpec {
             id: "link.refreshEffectCraft",
