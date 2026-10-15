@@ -276,11 +276,7 @@ fn hevc_main_and_main10_1080p_and_2160p_are_bit_exact() {
 /// depth 1, in the same order: whole stream with its end, and after `reset` + reseek to each
 /// later sync sample.
 ///
-/// Ignored by default: run at depths 2 to 6 on radeonsi (Radeon 8060S, Mesa 26.1.2) together with
-/// the other tests here, the video engine faulted and the kernel reset its ring (see `DEPTH`).
-/// Run it alone, on purpose: `cargo test -p filmcraft-platform --test vaapi -- --ignored pictures_in_flight`.
 #[test]
-#[ignore = "may fault the GPU's video engine on radeonsi; see vaapi::DEPTH"]
 fn pictures_in_flight_are_bit_exact_with_depth_one() {
     let ff = filmcraft_testkit::require_ffmpeg!();
     for (name, s) in small_streams(&ff) {
@@ -298,8 +294,17 @@ fn pictures_in_flight_are_bit_exact_with_depth_one() {
                 let end = (k + 17).min(s.samples.len());
                 one.reset();
                 deep.reset();
-                let a = decode_all(&mut one, &s.samples[k..end]);
-                assert_same(&format!("{name} at depth {depth} from sample {k}"), &decode_all(&mut deep, &s.samples[k..end]), &a);
+                let mut a = decode_all(&mut one, &s.samples[k..end]);
+                let mut b = decode_all(&mut deep, &s.samples[k..end]);
+                assert_eq!(a.len(), b.len(), "{name} at depth {depth} from sample {k}: pictures");
+                // after a seek to an open-GOP I picture, the pictures shown before it are concealed
+                // (predicted from frames never decoded): only those from the seek point on must match
+                if info().codec == filmcraft_codecs::hw::NalCodec::H264 && !info().nal_types(&s.samples[k].0).contains(&5) {
+                    let start = s.samples[k].1;
+                    a.retain(|f| f.pts >= start);
+                    b.retain(|f| f.pts >= start);
+                }
+                assert_same(&format!("{name} at depth {depth} from sample {k}"), &b, &a);
             }
         }
     }
