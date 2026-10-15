@@ -26,6 +26,7 @@ pub mod keyboard;
 mod keyframe_move;
 mod marker_export;
 pub mod masks;
+pub mod media_anchor; // ours
 pub mod media_browser;
 pub mod media_pool;
 pub mod media_watch;
