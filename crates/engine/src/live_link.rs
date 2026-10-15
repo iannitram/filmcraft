@@ -18,6 +18,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
@@ -152,21 +153,49 @@ pub struct Job {
 /// Run EffectCraft's command line: the comp to a ProRes 4444 movie with alpha. The seconds taken,
 /// or why it failed (with the end of what EffectCraft printed, which names its log).
 pub fn render(cli: &Path, job: &Job) -> std::result::Result<f64, String> {
+    render_cancellable(cli, job, &AtomicBool::new(false))
+}
+
+/// What a render cancelled by a newer save says (no failure is reported for it).
+pub const CANCELLED: &str = "cancelled: the project was saved again";
+
+/// [`render`], stopped (and its partial file removed) as soon as `cancel` is set.
+pub fn render_cancellable(cli: &Path, job: &Job, cancel: &AtomicBool) -> std::result::Result<f64, String> {
     if let Some(dir) = job.out.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
+    // what EffectCraft prints goes to a file: a pipe nobody reads could fill and stall it
+    let err_path = job.out.with_extension("render.txt");
+    let err_file = std::fs::File::create(&err_path).map_err(|e| format!("{}: {e}", err_path.display()))?;
     let t0 = Instant::now();
-    let out = Command::new(cli)
+    let mut child = Command::new(cli)
         .args(["render", "--project", &job.ecproj, "--comp", &job.comp.0.to_string(), "--out"])
         .arg(&job.out)
         .args(["--format", "prores", "--prores", "4444", "--channels", "rgba", "--json"])
         .stdin(Stdio::null())
-        .output()
+        .stdout(Stdio::null())
+        .stderr(err_file)
+        .spawn()
         .map_err(|e| format!("{}: {e}", cli.display()))?;
-    if !out.status.success() || !job.out.is_file() {
-        let err = String::from_utf8_lossy(&out.stderr);
+    let status = loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(&job.out);
+            let _ = std::fs::remove_file(&err_path);
+            return Err(CANCELLED.into());
+        }
+        match child.try_wait() {
+            Ok(Some(st)) => break st,
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(e) => return Err(format!("{}: {e}", cli.display())),
+        }
+    };
+    let err = std::fs::read_to_string(&err_path).unwrap_or_default();
+    let _ = std::fs::remove_file(&err_path);
+    if !status.success() || !job.out.is_file() {
         let tail: Vec<&str> = err.lines().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
-        return Err(format!("EffectCraft's render failed ({}): {}", out.status, tail.join(" / ")));
+        return Err(format!("EffectCraft's render failed ({status}): {}", tail.join(" / ")));
     }
     Ok(t0.elapsed().as_secs_f64())
 }
@@ -283,22 +312,38 @@ pub(crate) fn refresh(s: &mut Session, _: &Value) -> Result<Value> {
     Ok(json!({"refreshed": done}))
 }
 
-/// Finished renders from a worker thread, waiting to be swapped in.
-pub type LinkCheck = Arc<Mutex<Option<Vec<(Job, std::result::Result<f64, String>)>>>>;
+/// Renders running on a worker thread: the saves they are for, a way to stop them, and the
+/// finished results waiting to be swapped in.
+pub struct LinkCheck {
+    /// (.ecproj, its stamp) of each job being rendered.
+    rendering: Vec<(String, Option<String>)>,
+    cancel: Arc<AtomicBool>,
+    done: Arc<Mutex<Option<Vec<(Job, std::result::Result<f64, String>)>>>>,
+}
 
 impl Session {
     /// Desktop app: with the media watch (its timer and window focus), render on a worker thread
     /// the linked comps whose project was saved since, unless a check is still running.
     pub fn start_link_check(&mut self) {
-        if self.link_check.is_some() || cfg!(target_arch = "wasm32") {
+        if cfg!(target_arch = "wasm32") {
             return;
         }
         let jobs = due(self);
+        if let Some(running) = &self.link_check {
+            // a newer save of a project being rendered stops that render; the next look renders
+            // the newer one
+            if jobs.iter().any(|j| running.rendering.iter().any(|(p, st)| *p == j.ecproj && *st != j.stamp)) {
+                running.cancel.store(true, Ordering::Relaxed);
+            }
+            return;
+        }
         if jobs.is_empty() {
             return;
         }
-        let slot: LinkCheck = Arc::default();
-        let out = slot.clone();
+        let rendering = jobs.iter().map(|j| (j.ecproj.clone(), j.stamp.clone())).collect();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let done: Arc<Mutex<Option<Vec<(Job, std::result::Result<f64, String>)>>>> = Arc::default();
+        let (stop, out) = (cancel.clone(), done.clone());
         let cli = find_cli();
         let spawned = std::thread::Builder::new().name("live-link".into()).spawn(move || {
             let results = jobs
@@ -307,25 +352,27 @@ impl Session {
                     let r = cli
                         .as_deref()
                         .ok_or_else(|| "EffectCraft's command line was not found (FILMCRAFT_EFFECTCRAFT_CLI)".to_string())
-                        .and_then(|c| render(c, &job));
+                        .and_then(|c| render_cancellable(c, &job, &stop));
                     (job, r)
                 })
                 .collect();
             *out.lock().unwrap_or_else(PoisonError::into_inner) = Some(results);
         });
         if spawned.is_ok() {
-            self.link_check = Some(slot);
+            self.link_check = Some(LinkCheck { rendering, cancel, done });
         }
     }
 
     /// Apply a finished check (`None` while there is none, or it is still running).
     pub fn poll_link_check(&mut self) -> Option<Value> {
-        let results = self.link_check.as_ref()?.lock().unwrap_or_else(PoisonError::into_inner).take()?;
+        let results = self.link_check.as_ref()?.done.lock().unwrap_or_else(PoisonError::into_inner).take()?;
         self.link_check = None;
         let mut done = Vec::new();
         for (job, r) in results {
             match r.map_err(|e| e.to_string()).and_then(|secs| swap(self, &job, secs).map_err(|e| e.to_string())) {
                 Ok(()) => done.push(job.item.map_or(0, |i| i.0)),
+                // stopped for a newer save: the stamp stays, so the next look renders that one
+                Err(why) if why == CANCELLED => log::info!("decision: link: comp `{}` of {}: {why}", job.comp.1, job.ecproj),
                 Err(why) => {
                     // the stamp is not taken: the next look tries again only after another save
                     if let Some(id) = job.item
@@ -399,6 +446,30 @@ mod tests {
     fn renders_go_beside_the_project_numbered() {
         let p = render_path("/shows/ep1/ep1.fcproj", "/titles/Ep1 Titles.ecproj", (1, "Main/Title?"), 3).unwrap();
         assert_eq!(p, PathBuf::from("/shows/ep1/EffectCraft Renders/Ep1 Titles/Main_Title_-1-v3.mov"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_running_render_stops_when_cancelled() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("fc-link-cancel-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // a "command line" that never finishes
+        let slow = dir.join("slow-cli");
+        std::fs::write(&slow, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let job = Job { item: None, ecproj: "/x.ecproj".into(), comp: (1, "T".into()), out: dir.join("T-1-v2.mov"), version: 2, stamp: None };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let stop = cancel.clone();
+        let t0 = Instant::now();
+        let h = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            stop.store(true, Ordering::Relaxed);
+        });
+        assert_eq!(render_cancellable(&slow, &job, &cancel), Err(CANCELLED.to_string()));
+        assert!(t0.elapsed() < std::time::Duration::from_secs(5), "stopped in {:?}", t0.elapsed());
+        h.join().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
