@@ -25,7 +25,74 @@ mod tests;
 #[cfg(target_os = "linux")]
 pub use linux::VaDecoder;
 
+use std::collections::VecDeque;
+
+use filmcraft_codecs::{CodecError, DecodedFrame};
 use filmcraft_frame::VideoFrame;
+
+/// Pictures kept in flight: how many output pictures may wait, decoded or still decoding on the
+/// GPU, before the oldest is read back. At 1 every picture is read back (waiting for the GPU to
+/// finish it) as soon as the DPB outputs it, so the GPU decodes the next picture only after the CPU
+/// has read this one; deeper, the two overlap. The decoder makes `depth - 1` more surfaces for
+/// them (never past 18), and drops to 1 when the driver will not. `FILMCRAFT_VAAPI_DEPTH` (1 to 8)
+/// replaces it.
+///
+/// 1 until deeper is proven safe: on radeonsi (Radeon 8060S, Mesa 26.1.2, kernel
+/// 6.18.50-valve2), the VA-API test suite run at depth 3 made the video engine fault on a read
+/// (`[mmhub] page fault … Faulty UTCL2 client ID: VCN0`) and the kernel reset its ring, twice;
+/// which stream does it is not known yet.
+pub const DEPTH: usize = 1;
+
+/// The in-flight depth to use: [`DEPTH`], or `FILMCRAFT_VAAPI_DEPTH` when it is set to 1–8.
+pub fn depth_from_env() -> usize {
+    std::env::var("FILMCRAFT_VAAPI_DEPTH").ok().and_then(|v| v.trim().parse().ok()).filter(|d| (1..=8).contains(d)).unwrap_or(DEPTH)
+}
+
+/// Output pictures whose read-back is deferred (see [`DEPTH`]), oldest first: their surfaces are
+/// not reused until they are read. Reads keep output order, so what comes out is exactly what
+/// depth 1 gives, only later.
+pub(crate) struct Held {
+    depth: usize,
+    queue: VecDeque<(usize, i64)>,
+}
+
+impl Held {
+    pub(crate) fn new(depth: usize) -> Self {
+        Self { depth: depth.max(1), queue: VecDeque::new() }
+    }
+
+    /// Whether surface `index` holds a picture not read back yet.
+    pub(crate) fn holds(&self, index: usize) -> bool {
+        self.queue.iter().any(|&(i, _)| i == index)
+    }
+
+    /// Queue `outs` (surface, pts) in output order, then read back all but the newest
+    /// `depth - 1`.
+    pub(crate) fn output<A: Accel>(
+        &mut self,
+        accel: &mut A,
+        outs: impl IntoIterator<Item = (usize, i64)>,
+        frames: &mut Vec<DecodedFrame>,
+    ) -> Result<(), CodecError> {
+        self.queue.extend(outs);
+        self.drain(accel, self.depth - 1, frames)
+    }
+
+    /// Read back the oldest pictures until `keep` are left.
+    pub(crate) fn drain<A: Accel>(&mut self, accel: &mut A, keep: usize, frames: &mut Vec<DecodedFrame>) -> Result<(), CodecError> {
+        while self.queue.len() > keep {
+            let Some((index, pts)) = self.queue.pop_front() else { break };
+            let frame = accel.read(index).map_err(CodecError::Decode)?;
+            frames.push(DecodedFrame { pts, frame, draft: false });
+        }
+        Ok(())
+    }
+
+    /// Forget the pictures not read back (a seek).
+    pub(crate) fn clear(&mut self) {
+        self.queue.clear();
+    }
+}
 
 /// The hardware a front end ([`h264::Front`], [`hevc::Front`]) drives: a fixed set of surfaces,
 /// picture decoding into one of them, and reading one back or filling it.
@@ -95,6 +162,35 @@ mod linux {
         Hevc(Box<hevc::Front<Session>>),
     }
 
+    /// The most surfaces a decoder is made with (the DPB's, the picture being decoded, a spare, and
+    /// the pictures in flight).
+    const MAX_SURFACES: usize = 18;
+
+    /// A session with `count` surfaces plus one for each picture in flight beyond the first, and
+    /// that depth; at depth 1 when the driver will not make the extra surfaces.
+    fn sessions(
+        profiles: &[ffi::VAProfile],
+        size: (u32, u32),
+        count: usize,
+        depth: usize,
+        geometry: Geometry,
+    ) -> std::result::Result<(Session, usize), String> {
+        // never past MAX_SURFACES: on radeonsi (Radeon 8060S, Mesa 26.1.2), decoders given up to
+        // 23 surfaces made the video engine fault on a read and the kernel reset its ring
+        let fits = MAX_SURFACES.saturating_sub(count) + 1;
+        if depth > fits {
+            log::info!("decision: decode: VA-API keeps {fits} pictures in flight, not {depth}: the DPB takes {count} of {MAX_SURFACES} surfaces");
+        }
+        let depth = depth.min(fits).max(1);
+        if depth > 1 {
+            match Session::new(profiles, size, count + depth - 1, geometry) {
+                Ok(s) => return Ok((s, depth)),
+                Err(e) => log::warn!("decision: decode: VA-API keeps one picture in flight, not {depth}: {count} + {} surfaces were refused ({e})", depth - 1),
+            }
+        }
+        Ok((Session::new(profiles, size, count, geometry)?, 1))
+    }
+
     /// A VA-API decoder for one H.264 or HEVC stream.
     pub struct VaDecoder {
         front: Front,
@@ -113,6 +209,11 @@ mod linux {
     impl VaDecoder {
         /// A decoder for the stream `info` describes, or why VA-API does not take it on this system.
         pub fn new(info: NalStreamInfo) -> std::result::Result<Self, String> {
+            Self::with_depth(info, super::depth_from_env())
+        }
+
+        /// [`VaDecoder::new`] keeping `depth` output pictures in flight (see [`super::DEPTH`]).
+        pub fn with_depth(info: NalStreamInfo, depth: usize) -> std::result::Result<Self, String> {
             let bits = info.bit_depth_luma;
             if info.chroma_format_idc != 1 || info.bit_depth_chroma != bits || info.interlaced {
                 return Err(format!(
@@ -134,10 +235,11 @@ mod linux {
                     sps.check_supported().map_err(|e| e.to_string())?;
                     let mbs = (sps.pic_width_in_mbs, sps.frame_height_in_mbs());
                     // the DPB, the picture being decoded, and one spare
-                    let count = sps.max_dpb_frames().saturating_add(2).min(18);
-                    let session = Session::new(profiles, (sps.width(), sps.height()), count, geometry)?;
+                    let count = sps.max_dpb_frames().saturating_add(2).min(MAX_SURFACES);
+                    let (session, depth) = sessions(profiles, (sps.width(), sps.height()), count, depth, geometry)?;
                     let vendor = session.vendor().to_string();
-                    (Front::H264(Box::new(h264::Front::new(session, info.length_size, mbs, &info.parameter_sets).map_err(|e| e.to_string())?)), "H.264", vendor)
+                    let front = h264::Front::new(session, info.length_size, mbs, &info.parameter_sets).map_err(|e| e.to_string())?.with_depth(depth);
+                    (Front::H264(Box::new(front)), "H.264", vendor)
                 }
                 NalCodec::Hevc => {
                     let profiles =
@@ -148,15 +250,12 @@ mod linux {
                     if sps.range_extension {
                         return Err("HEVC range extensions are not taken".into());
                     }
-                    let count = (sps.max_dec_pic_buffering as usize).saturating_add(2).min(18);
+                    let count = (sps.max_dec_pic_buffering as usize).saturating_add(2).min(MAX_SURFACES);
                     let size = (sps.width, sps.height);
-                    let session = Session::new(profiles, size, count, geometry)?;
+                    let (session, depth) = sessions(profiles, size, count, depth, geometry)?;
                     let vendor = session.vendor().to_string();
-                    (
-                        Front::Hevc(Box::new(hevc::Front::new(session, info.length_size, size, bits, &info.parameter_sets).map_err(|e| e.to_string())?)),
-                        "HEVC",
-                        vendor,
-                    )
+                    let front = hevc::Front::new(session, info.length_size, size, bits, &info.parameter_sets).map_err(|e| e.to_string())?.with_depth(depth);
+                    (Front::Hevc(Box::new(front)), "HEVC", vendor)
                 }
             };
             let name = format!("VA-API {codec} ({vendor})");
