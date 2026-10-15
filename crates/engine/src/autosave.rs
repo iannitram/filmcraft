@@ -252,6 +252,9 @@ pub struct MediaPrefs {
     pub growing_refresh_seconds: u32,
     pub hardware_decoding: bool,
     pub prores_hardware_encoding: bool,
+    /// Ours (live links): EffectCraft's command line; empty = look for it
+    /// (`filmcraft_engine::live_link::find_cli`).
+    pub effectcraft_cli: String,
 }
 
 impl Default for MediaPrefs {
@@ -276,6 +279,7 @@ impl Default for MediaPrefs {
             growing_refresh_seconds: 60,
             hardware_decoding: true,
             prores_hardware_encoding: true,
+            effectcraft_cli: String::new(),
         }
     }
 }

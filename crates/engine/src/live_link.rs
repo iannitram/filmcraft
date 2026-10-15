@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Instant;
+use web_time::Instant;
 
 use filmcraft_project::{ItemId, MediaRef};
 use serde_json::{Value, json};
@@ -79,9 +79,13 @@ pub fn project_now(meta: &std::collections::BTreeMap<String, String>, fc: Option
     Path::new(&moved).is_file().then_some(moved)
 }
 
-/// The EffectCraft command-line program: `FILMCRAFT_EFFECTCRAFT_CLI`, else `effectcraft-cli` on
-/// `PATH`, else `~/Applications/craft/effectcraft-cli` (where the Craft apps are kept on Linux).
+/// The EffectCraft command-line program: Settings ▸ Media ▸ EffectCraft command line
+/// ([`set_cli`]), else `FILMCRAFT_EFFECTCRAFT_CLI`, else `effectcraft-cli` on `PATH`, else
+/// `~/Applications/craft/effectcraft-cli` (where the Craft apps are kept on Linux).
 pub fn find_cli() -> Option<PathBuf> {
+    if let Some(p) = SETTING.lock().unwrap_or_else(PoisonError::into_inner).clone().filter(|p| !p.is_empty()) {
+        return Some(PathBuf::from(p));
+    }
     if let Some(p) = std::env::var_os("FILMCRAFT_EFFECTCRAFT_CLI").filter(|p| !p.is_empty()) {
         return Some(PathBuf::from(p));
     }
@@ -91,6 +95,13 @@ pub fn find_cli() -> Option<PathBuf> {
     }
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })?;
     Some(PathBuf::from(home).join("Applications").join("craft").join(exe)).filter(|p| p.is_file())
+}
+
+static SETTING: Mutex<Option<String>> = Mutex::new(None);
+
+/// The command line Settings names (empty: look for it), as the session's preferences say.
+fn set_cli(s: &Session) {
+    *SETTING.lock().unwrap_or_else(PoisonError::into_inner) = Some(s.prefs.media.effectcraft_cli.trim().to_string());
 }
 
 /// The EffectCraft app: `FILMCRAFT_EFFECTCRAFT_APP`, else `effectcraft` on `PATH`, else beside
@@ -254,6 +265,7 @@ pub fn render_cancellable(cli: &Path, job: &Job, cancel: &AtomicBool) -> std::re
 
 /// The linked items whose .ecproj changed since their last render: their next jobs.
 pub fn due(s: &Session) -> Vec<Job> {
+    set_cli(s);
     let Some(fc) = s.path.clone() else { return Vec::new() };
     let mut jobs = Vec::new();
     for (id, it) in &s.project.items {
@@ -318,7 +330,9 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> Result<Value> {
         .map(|c| c.as_str().map(str::to_string).unwrap_or_else(|| c.to_string()))
         .ok_or_else(|| EngineError::Other("link.addEffectCraft: need `comp` (id or name)".into()))?;
     let fc = s.path.clone().ok_or_else(|| EngineError::Other("save the FilmCraft project first: renders go beside it".into()))?;
-    let cli = find_cli().ok_or_else(|| EngineError::Other("EffectCraft's command line was not found: set FILMCRAFT_EFFECTCRAFT_CLI".into()))?;
+    set_cli(s);
+    let cli = find_cli()
+        .ok_or_else(|| EngineError::Other("EffectCraft's command line was not found: set it in Settings ▸ Media ▸ EffectCraft command line".into()))?;
     let text = std::fs::read_to_string(&ecproj).map_err(|e| EngineError::Other(format!("{ecproj}: {e}")))?;
     let (cid, name) = find_comp(&text, &comp).ok_or_else(|| EngineError::Other(format!("{ecproj} has no composition `{comp}`")))?;
     let out = render_path(&fc, &ecproj, (cid, &name), 1).ok_or_else(|| EngineError::Other("no folder for the render".into()))?;
@@ -357,8 +371,10 @@ pub(crate) fn refresh(s: &mut Session, _: &Value) -> Result<Value> {
     let cli = find_cli();
     let mut done = Vec::new();
     for job in jobs {
-        let result =
-            cli.as_deref().ok_or_else(|| "EffectCraft's command line was not found (FILMCRAFT_EFFECTCRAFT_CLI)".to_string()).and_then(|c| render(c, &job));
+        let result = cli
+            .as_deref()
+            .ok_or_else(|| "EffectCraft's command line was not found: set it in Settings ▸ Media ▸ EffectCraft command line".to_string())
+            .and_then(|c| render(c, &job));
         match result {
             Ok(secs) => {
                 swap(s, &job, secs)?;
@@ -409,7 +425,7 @@ impl Session {
                 .map(|job| {
                     let r = cli
                         .as_deref()
-                        .ok_or_else(|| "EffectCraft's command line was not found (FILMCRAFT_EFFECTCRAFT_CLI)".to_string())
+                        .ok_or_else(|| "EffectCraft's command line was not found: set it in Settings ▸ Media ▸ EffectCraft command line".to_string())
                         .and_then(|c| render_cancellable(c, &job, &stop));
                     (job, r)
                 })
@@ -596,6 +612,8 @@ mod tests {
         };
         ec(&[("comp.new", json!({"name": "Main Title", "duration": 1.0})), ("comp.new", json!({"name": "Lower Third", "duration": 1.0}))]);
         let mut s = Session::default();
+        // the command line named in Settings ▸ Media
+        s.execute("prefs.set", json!({"key": "media.effectcraftCli", "value": cli.to_string_lossy()})).unwrap();
         let fc = dir.join("ep.fcproj").to_string_lossy().into_owned();
         s.execute("file.save", json!({"path": fc})).unwrap();
         let r = s.execute("link.addEffectCraft", json!({"project": ecproj, "comp": "Main Title"})).unwrap();
