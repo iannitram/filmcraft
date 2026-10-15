@@ -25,6 +25,8 @@ struct Recorder {
     decoded: Vec<bool>,
     /// Which picture (decoding order; `usize::MAX` for mid-gray) each surface holds.
     content: Vec<usize>,
+    /// Surfaces holding a stand-in ([`Accel::fill`]) rather than a picture the hardware decoded.
+    filled: Vec<bool>,
     pictures: usize,
     frame: VideoFrame,
 }
@@ -33,7 +35,14 @@ impl Recorder {
     fn new(count: usize) -> Self {
         let g = Geometry { crop: (0, 0, 2, 2), bits: 8, color: Default::default(), par: (1, 1) };
         let frame = biplanar::to_frame(&Biplanar { luma: &[128; 4], chroma: &[128; 2], stride: 2, rows: 2 }, &g).unwrap();
-        Self { ids: (0..count as u32).map(|i| 0x100 + i).collect(), decoded: vec![false; count], content: vec![usize::MAX; count], pictures: 0, frame }
+        Self {
+            ids: (0..count as u32).map(|i| 0x100 + i).collect(),
+            decoded: vec![false; count],
+            content: vec![usize::MAX; count],
+            filled: vec![false; count],
+            pictures: 0,
+            frame,
+        }
     }
 }
 
@@ -107,6 +116,9 @@ impl Accel for Recorder {
         for r in &refs {
             let i = self.ids.iter().position(|&id| id == r.picture_id).expect("reference is a decoder surface");
             assert!(self.decoded[i], "reference surface {i} holds a picture");
+            // never a stand-in ([`Accel::fill`]): a driver keeping its own copy of each picture it
+            // decoded has none for one (and list entries are reference frames, checked below)
+            assert!(!self.filled[i], "reference surface {i} holds a picture the hardware decoded, not a stand-in");
             assert!(r.flags & (ffi::VA_PICTURE_H264_SHORT_TERM_REFERENCE | ffi::VA_PICTURE_H264_LONG_TERM_REFERENCE) != 0, "reference flags");
         }
         assert!(!slices.is_empty());
@@ -128,6 +140,7 @@ impl Accel for Recorder {
         }
         self.decoded[target] = true;
         self.content[target] = self.pictures;
+        self.filled[target] = false;
         self.pictures += 1;
         Ok(())
     }
@@ -144,6 +157,7 @@ impl Accel for Recorder {
         assert!(from.is_none_or(|f| self.decoded[f]));
         self.decoded[index] = true;
         self.content[index] = from.map_or(usize::MAX, |f| self.content[f]);
+        self.filled[index] = true;
         Ok(())
     }
 }

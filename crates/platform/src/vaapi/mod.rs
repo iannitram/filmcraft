@@ -37,11 +37,11 @@ use filmcraft_frame::VideoFrame;
 /// them (never past 18), and drops to 1 when the driver will not. `FILMCRAFT_VAAPI_DEPTH` (1 to 8)
 /// replaces it.
 ///
-/// 1 until deeper is proven safe: on radeonsi (Radeon 8060S, Mesa 26.1.2, kernel
-/// 6.18.50-valve2), the VA-API test suite run at depth 3 made the video engine fault on a read
-/// (`[mmhub] page fault … Faulty UTCL2 client ID: VCN0`) and the kernel reset its ring, twice;
-/// which stream does it is not known yet.
-pub const DEPTH: usize = 1;
+/// Measured on the Z13 (Radeon 8060S; radeonsi, Mesa 26.1.2), depth 1 to 3: 2160p HEVC 132–136
+/// to 179–181 fps, 2160p H.264 177–180 to 204–212, CPU time unchanged. Deeper only showed the video
+/// engine faulting while frame_num-gap stand-ins still went to the hardware as references (Mesa 26.1
+/// before 26.1.4 lost the guard, MR 29055 / 42256); they no longer do (`h264::Held::Gap`).
+pub const DEPTH: usize = 3;
 
 /// The in-flight depth to use: [`DEPTH`], or `FILMCRAFT_VAAPI_DEPTH` when it is set to 1–8.
 pub fn depth_from_env() -> usize {
