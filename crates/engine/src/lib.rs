@@ -450,6 +450,8 @@ pub struct Session {
     pub media_scan: Option<media_watch::MediaScan>,
     /// Ours: EffectCraft renders running on a worker thread ([`Session::start_link_check`]).
     pub link_check: Option<live_link::LinkCheck>,
+    /// Ours: the EffectCraft copies started for live links, by .ecproj (no second copy).
+    pub link_editors: std::collections::HashMap<String, std::process::Child>,
 }
 
 /// An export advanced a batch at a time on the host's thread ([`Session::pump_jobs`]).
@@ -543,6 +545,7 @@ impl Session {
             media_stamps: Default::default(),
             media_scan: None,
             link_check: None,
+            link_editors: Default::default(),
         }
     }
 
