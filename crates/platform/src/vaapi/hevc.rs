@@ -22,7 +22,7 @@ use super::ffi::{
     self, VAIQMatrixBufferHEVC, VAPictureHEVC, VAPictureParameterBufferHEVC, VASliceParameterBufferHEVC, hevc_pic_bits, hevc_slice_bits,
     hevc_slice_parsing_bits,
 };
-use super::{Accel, Held};
+use super::{Accel, InFlight};
 
 /// A picture in the DPB: its surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,7 +70,7 @@ pub struct Front<A: Accel> {
     skip_rasl: bool,
     after_eos: bool,
     /// Output pictures not read back yet.
-    held: Held,
+    in_flight: InFlight,
 }
 
 fn decode_err(e: impl std::fmt::Display) -> CodecError {
@@ -100,7 +100,7 @@ impl<A: Accel> Front<A> {
             first_picture: true,
             skip_rasl: false,
             after_eos: false,
-            held: Held::new(1),
+            in_flight: InFlight::new(1),
         };
         let mut frames = Vec::new();
         for nal in parameter_sets {
@@ -113,7 +113,7 @@ impl<A: Accel> Front<A> {
     /// `depth - 1` surfaces beyond the DPB's.
     #[must_use]
     pub fn with_depth(mut self, depth: usize) -> Self {
-        self.held = Held::new(depth);
+        self.in_flight = InFlight::new(depth);
         self
     }
 
@@ -140,14 +140,14 @@ impl<A: Accel> Front<A> {
         let mut outs = Vec::new();
         self.dpb.flush(&mut outs);
         self.read_out(outs, &mut frames)?;
-        self.held.drain(&mut self.accel, 0, &mut frames)?;
+        self.in_flight.drain(&mut self.accel, 0, &mut frames)?;
         self.first_picture = true;
         Ok(frames)
     }
 
     /// Forget every picture (after a seek).
     pub fn reset(&mut self) {
-        self.held.clear();
+        self.in_flight.clear();
         self.dpb = Dpb::default();
         self.poc_state = PocState::default();
         self.active_sps = None;
@@ -159,7 +159,7 @@ impl<A: Accel> Front<A> {
 
     /// Read back the pictures the DPB output, right away: a surface leaving the DPB is reused.
     fn read_out(&mut self, outs: Vec<Output<Surface>>, frames: &mut Vec<DecodedFrame>) -> Result<()> {
-        self.held.output(&mut self.accel, outs.into_iter().map(|o| (o.frame.index, o.meta.pts)), frames)
+        self.in_flight.output(&mut self.accel, outs.into_iter().map(|o| (o.frame.index, o.meta.pts)), frames)
     }
 
     fn handle_nal(&mut self, nal: &[u8], pts: i64, frames: &mut Vec<DecodedFrame>) -> Result<()> {
@@ -280,7 +280,7 @@ impl<A: Accel> Front<A> {
         self.read_out(outs, frames)?;
         let surfaces = self.accel.surfaces();
         let target = (0..surfaces.len())
-            .find(|&i| !self.dpb.entries.iter().any(|e| e.frame.index == i) && !self.held.holds(i))
+            .find(|&i| !self.dpb.entries.iter().any(|e| e.frame.index == i) && !self.in_flight.holds(i))
             .ok_or_else(|| decode_err("no free surface"))?;
         let target_id = surfaces.get(target).copied().ok_or_else(|| decode_err("surface out of range"))?;
         let mut pic = picture_params(sps, pps, sh)?;
