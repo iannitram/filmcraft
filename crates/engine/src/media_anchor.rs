@@ -4,14 +4,15 @@
 //! envelope; [`filmcraft_format::encode_at`]). Media paths stay absolute, as before. When a project
 //! is opened from another folder, each media file (and proxy) is looked for at the same place
 //! relative to the project as when it was saved: `relative(path, saved_dir)` joined to the folder
-//! it is opened from. A file found there with the recorded size (when one is recorded) replaces
-//! the absolute path; otherwise the absolute path stays, and whatever is still missing goes to
+//! it is opened from. A file found there with the recorded identity (size and content fingerprint,
+//! as Link Media checks; media without one never follow) replaces the absolute path, and its proxy
+//! follows with it when the proxy is a file at its own relative place; otherwise the absolute path stays, and whatever is still missing goes to
 //! Link Media as before. So a show folder moved or copied with its media (another drive, another
 //! machine, Collect Files) opens without relinking.
 //!
 //! Relative first, and only when the project has moved: the copy beside the moved project is the
-//! one meant, even when the original still exists. The size check keeps a different file at that
-//! place from being taken. Paths are compared lexically, splitting on `/` and `\`, so a project
+//! one meant, even when the original still exists. The identity check keeps a different file at
+//! that place from being taken, even one of the same size. Paths are compared lexically, splitting on `/` and `\`, so a project
 //! saved on Windows opens on Linux and the other way round. Media on another drive than the project
 //! (no shared folder) has no relative place and keeps its absolute path.
 
@@ -26,6 +27,10 @@ pub fn folder_of(path: &str) -> Option<String> {
     }
     let cut = path.rfind(['/', '\\'])?;
     let dir = &path[..cut];
+    // a UNC path needs `\\server\share` before the file: `\\p.fcproj` has no folder
+    if path.starts_with("\\\\") && !dir.get(2..).unwrap_or("").contains(['/', '\\']) {
+        return None;
+    }
     // the root itself: keep its separator ("/", "C:\")
     Some(if dir.is_empty() || dir.ends_with(':') { path[..=cut].to_string() } else { dir.to_string() })
 }
@@ -43,7 +48,8 @@ fn parts(p: &str) -> (String, Vec<&str>) {
     } else if p.starts_with('/') {
         "/".to_string()
     } else {
-        p[..2].to_string()
+        // `C:`; never slice past a short string (a lone `\` reached here and panicked)
+        p.get(..2).unwrap_or(p).to_string()
     };
     let body = &p[root.len().min(p.len())..];
     let names = body.split(['/', '\\']).filter(|c| !c.is_empty() && *c != ".").collect();
@@ -70,20 +76,21 @@ pub fn relative(file: &str, dir: &str) -> Option<Vec<String>> {
     Some(out)
 }
 
-/// `rel` ([`relative`]) joined to the folder `dir`, written with `dir`'s separator.
-pub fn resolve(rel: &[String], dir: &str) -> String {
+/// `rel` ([`relative`]) joined to the folder `dir`, written with `dir`'s separator. `None` when
+/// `rel` climbs above the root (more `..` than `dir` has folders).
+pub fn resolve(rel: &[String], dir: &str) -> Option<String> {
     let sep = if dir.contains('\\') && !dir.contains('/') { '\\' } else { '/' };
     let (root, mut names) = parts(dir);
     let mut names: Vec<String> = names.drain(..).map(str::to_string).collect();
     for c in rel {
         if c == ".." {
-            names.pop();
+            names.pop()?;
         } else {
             names.push(c.clone());
         }
     }
     let root = if root == "/" { String::new() } else { root };
-    format!("{root}{sep}{}", names.join(&sep.to_string()))
+    Some(format!("{root}{sep}{}", names.join(&sep.to_string())))
 }
 
 /// Whether two folders are the same place (separators, a trailing separator and, for drive
@@ -106,23 +113,33 @@ pub fn follow(project: &mut Project, saved_dir: Option<&str>, project_path: &str
         return 0;
     }
     let mut changed = 0;
-    let candidate = |path: &str, size: Option<u64>| -> Option<String> {
-        let cand = resolve(&relative(path, saved)?, &now);
-        let got = services.file_size(&cand).ok()?;
-        (size.is_none_or(|s| s == got) && cand != path).then_some(cand)
-    };
+    let place = |path: &str| -> Option<String> { resolve(&relative(path, saved)?, &now).filter(|c| c != path) };
     for it in project.items.values_mut() {
         let ItemKind::Media(m) = &mut it.kind else { continue };
-        let size = m.identity.map(|i| i.size);
+        // The file must be the one imported: same size AND content fingerprint (as Link Media
+        // checks). Without a recorded identity nothing proves it, so it is not followed.
+        let mut followed = false;
         if let MediaRef::File { path } = &mut m.media
-            && let Some(cand) = candidate(path, size)
+            && let Some(want) = m.identity
+            && let Some(cand) = place(path)
         {
-            log::info!("decision: media: \"{path}\" followed the project folder to \"{cand}\"");
-            *path = cand;
-            changed += 1;
+            match crate::relink::identity_of(services, &cand) {
+                Ok(got) if got == want => {
+                    log::info!("decision: media: \"{path}\" followed the project folder to \"{cand}\"");
+                    *path = cand;
+                    changed += 1;
+                    followed = true;
+                }
+                Ok(_) => log::info!("decision: media: \"{cand}\" beside the moved project is another file (identity differs); \"{path}\" kept"),
+                Err(_) => {}
+            }
         }
-        if let Some(MediaRef::File { path }) = &mut m.proxy
-            && let Some(cand) = candidate(path, None)
+        // A proxy records no identity: it follows only with its media (the folder is proven to
+        // have moved with it), and only to a regular file.
+        if followed
+            && let Some(MediaRef::File { path }) = &mut m.proxy
+            && let Some(cand) = place(path)
+            && services.file_size(&cand).is_ok()
         {
             log::info!("decision: media: proxy \"{path}\" followed the project folder to \"{cand}\"");
             *path = cand;
@@ -162,10 +179,25 @@ mod tests {
     #[test]
     fn resolve_joins_with_the_folders_separator() {
         let r = |s: &str| s.split('/').map(str::to_string).collect::<Vec<_>>();
-        assert_eq!(resolve(&r("../Media/a.mov"), r"K:\Moved\Ep1\Projects"), r"K:\Moved\Ep1\Media\a.mov");
-        assert_eq!(resolve(&r("media/a.mov"), "/mnt/usb/ep1"), "/mnt/usb/ep1/media/a.mov");
+        assert_eq!(resolve(&r("../Media/a.mov"), r"K:\Moved\Ep1\Projects").as_deref(), Some(r"K:\Moved\Ep1\Media\a.mov"));
+        assert_eq!(resolve(&r("media/a.mov"), "/mnt/usb/ep1").as_deref(), Some("/mnt/usb/ep1/media/a.mov"));
         // saved on Windows, opened on Linux
-        assert_eq!(resolve(&relative(r"J:\Shows\Ep1\Media\a.mov", r"J:\Shows\Ep1").unwrap(), "/home/sam/Ep1"), "/home/sam/Ep1/Media/a.mov");
+        assert_eq!(resolve(&relative(r"J:\Shows\Ep1\Media\a.mov", r"J:\Shows\Ep1").unwrap(), "/home/sam/Ep1").as_deref(), Some("/home/sam/Ep1/Media/a.mov"));
+        // more `..` than the folder has: refused, not stopped at the root
+        assert_eq!(resolve(&r("../../../a.mov"), "/ep1"), None);
+        assert_eq!(resolve(&r("../a.mov"), r"C:\"), None);
+    }
+
+    #[test]
+    fn short_and_odd_paths_do_not_panic() {
+        // the Legion Go's crash: `\\p.fcproj` gave the folder `\`, and parts sliced 2 bytes of 1
+        assert_eq!(folder_of(r"\\p.fcproj"), None);
+        assert_eq!(folder_of(r"\\srv\share\p.fcproj").as_deref(), Some(r"\\srv\share"));
+        for p in [r"\", "/", "C", "C:", r"\\", r"\\srv"] {
+            let _ = parts(p);
+            let _ = relative("/a/b.mov", p);
+            let _ = resolve(&["..".to_string(), "b.mov".to_string()], p);
+        }
     }
 
     #[test]
@@ -251,6 +283,53 @@ mod tests {
         assert!(p.contains(&new.join("Media").join("a.mov").to_string_lossy().into_owned()), "{p:?}");
         assert!(p.contains(&old.join("Media").join("b.mov").to_string_lossy().into_owned()), "{p:?}");
         let _ = path;
+    }
+
+    #[test]
+    fn a_same_size_file_at_the_moved_place_is_not_taken() {
+        let root = tmp_dir("anchor-same-size");
+        let old = root.join("Show");
+        let path = saved_show(&old);
+        let new = root.join("Moved");
+        std::fs::rename(&old, &new).unwrap();
+        // b.mov beside the moved project: same size, other content (the fingerprint differs)
+        let b = new.join("Media").join("b.mov");
+        let n = std::fs::metadata(&b).unwrap().len() as usize;
+        std::fs::write(&b, vec![0u8; n]).unwrap();
+        let mut s = Session::default();
+        let r = s.execute("file.open", json!({"path": new.join("Project").join("p.fcproj").to_string_lossy()})).unwrap();
+        assert_eq!(r["missingMedia"], json!(1), "{r}");
+        assert!(media_paths(&s).contains(&old.join("Media").join("b.mov").to_string_lossy().into_owned()));
+        let _ = path;
+    }
+
+    #[test]
+    fn media_without_a_recorded_identity_does_not_follow() {
+        let root = tmp_dir("anchor-no-identity");
+        let old = root.join("Show");
+        let path = saved_show(&old);
+        // as a project from an older build: no identity on any media
+        fn strip(v: &mut serde_json::Value) {
+            match v {
+                serde_json::Value::Object(o) => {
+                    o.remove("identity");
+                    o.values_mut().for_each(strip);
+                }
+                serde_json::Value::Array(a) => a.iter_mut().for_each(strip),
+                _ => {}
+            }
+        }
+        let mut doc: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(doc.to_string().contains("\"identity\""), "imports record an identity");
+        strip(&mut doc);
+        std::fs::write(&path, serde_json::to_vec(&doc).unwrap()).unwrap();
+        let new = root.join("Moved");
+        std::fs::rename(&old, &new).unwrap();
+        // even an 18-byte file at the place is not taken: nothing proves it is the same
+        std::fs::write(new.join("Media").join("b.mov"), b"eighteen bytes....").unwrap();
+        let mut s = Session::default();
+        let r = s.execute("file.open", json!({"path": new.join("Project").join("p.fcproj").to_string_lossy()})).unwrap();
+        assert_eq!(r["missingMedia"], json!(2), "{r}");
     }
 
     #[test]
