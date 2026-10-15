@@ -381,10 +381,12 @@ pub fn answer_now() -> Answer {
 /// Sizes the main window for the screen it opens on (see the module). Asks the compositor on the
 /// first call only and logs the decision once; `main` builds the options again for each graphics
 /// retry and gets the same answer.
+#[cfg(target_os = "linux")]
+static DECISION: std::sync::OnceLock<Decision> = std::sync::OnceLock::new();
+
 pub fn apply(viewport: &mut egui::ViewportBuilder) {
     #[cfg(target_os = "linux")]
     {
-        static DECISION: std::sync::OnceLock<Decision> = std::sync::OnceLock::new();
         let decision = DECISION.get_or_init(|| {
             let asked = viewport.inner_size.map(|v| [v.x, v.y]);
             let min = viewport.min_inner_size.map_or([0.0, 0.0], |v| [v.x, v.y]);
@@ -400,6 +402,71 @@ pub fn apply(viewport: &mut egui::ViewportBuilder) {
     }
     #[cfg(not(target_os = "linux"))]
     let _ = viewport;
+}
+
+/// After the main window opened maximized ([`Fit::Maximized`]), each time it is un-maximized:
+/// `window: restored to WxH points (return size WxH)`, so checking the return size needs no
+/// screenshot. Nothing when the window did not open maximized.
+#[derive(Debug, Default)]
+pub struct RestoreWatch {
+    maximized: bool,
+    /// Its size while maximized.
+    maximized_size: Option<[f32; 2]>,
+    /// Un-maximized, new size not seen yet (on Wayland it arrives a frame or more later).
+    pending: bool,
+}
+
+impl RestoreWatch {
+    /// One frame's view of the window: maximized (when known) and its inner size in points.
+    /// The line to log, on the first frame after un-maximizing whose size differs from the
+    /// maximized one.
+    pub fn step(&mut self, maximized: Option<bool>, inner: Option<[f32; 2]>, restore: [f32; 2]) -> Option<String> {
+        if let Some(now) = maximized {
+            let was = std::mem::replace(&mut self.maximized, now);
+            if now {
+                self.pending = false;
+                self.maximized_size = inner.or(self.maximized_size);
+            } else if was {
+                self.pending = true;
+            }
+        }
+        let size = inner.filter(|s| self.pending && !self.maximized && Some(*s) != self.maximized_size)?;
+        self.pending = false;
+        Some(format!("window: restored to {} points (return size {})", wxh(size), wxh(restore)))
+    }
+
+    /// Waiting for the size after un-maximizing (the caller asks for another frame).
+    pub fn waiting(&self) -> bool {
+        self.pending
+    }
+}
+
+/// Watch the main window for un-maximizing (see [`RestoreWatch`]); a no-op unless [`apply`]
+/// opened it maximized.
+pub fn watch(ctx: &egui::Context) {
+    #[cfg(target_os = "linux")]
+    {
+        let Some(Fit::Maximized { restore }) = DECISION.get().map(|d| d.fit) else { return };
+        let watch = std::sync::Mutex::new(RestoreWatch::default());
+        ctx.on_end_pass(
+            "window-fit-restore",
+            std::sync::Arc::new(move |ui| {
+                // inner_rect needs the window's position, which Wayland never gives: the content
+                // area egui lays out is the same size
+                let ctx = ui.ctx();
+                let (maximized, inner) = ctx.input(|i| (i.viewport().maximized, i.viewport().inner_rect.map(|r| [r.width(), r.height()])));
+                let inner = inner.or_else(|| Some(ctx.content_rect().size()).map(|v| [v.x, v.y]));
+                let mut watch = watch.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(line) = watch.step(maximized, inner, restore) {
+                    log::info!("{line}");
+                } else if watch.waiting() {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                }
+            }),
+        );
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = ctx;
 }
 
 #[cfg(test)]
@@ -510,6 +577,28 @@ mod tests {
         let d = decide_for(vec![big, z13(true)]);
         assert_eq!(d.fit, Fit::Maximized { restore: [1472.0, 832.0] });
         assert!(d.line.contains("smallest of 2 screens"), "{}", d.line);
+    }
+
+    #[test]
+    fn un_maximizing_logs_the_size_got_once_per_un_maximize() {
+        let restore = [1472.0, 832.0];
+        let full = Some([1536.0, 862.0]);
+        let mut w = RestoreWatch::default();
+        assert_eq!(w.step(None, None, restore), None, "not known yet");
+        assert_eq!(w.step(Some(true), full, restore), None);
+        // un-maximized; the first frames still show the maximized size (Wayland)
+        assert_eq!(w.step(Some(false), full, restore), None);
+        assert!(w.waiting());
+        assert_eq!(w.step(Some(false), None, restore), None);
+        assert_eq!(w.step(Some(false), Some([1472.0, 832.0]), restore).as_deref(), Some("window: restored to 1472x832 points (return size 1472x832)"));
+        assert!(!w.waiting());
+        assert_eq!(w.step(Some(false), Some([1472.0, 832.0]), restore), None, "once");
+        // maximized again and back: logged again
+        assert_eq!(w.step(Some(true), full, restore), None);
+        assert_eq!(w.step(Some(false), Some([1400.0, 800.0]), restore).as_deref(), Some("window: restored to 1400x800 points (return size 1472x832)"));
+        // never maximized: nothing
+        let mut never = RestoreWatch::default();
+        assert_eq!(never.step(Some(false), Some([800.0, 600.0]), restore), None);
     }
 
     #[test]
