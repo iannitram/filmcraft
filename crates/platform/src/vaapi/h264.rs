@@ -224,17 +224,29 @@ impl<A: Accel> Front<A> {
         let surfaces = self.accel.surfaces();
         let lists = self
             .dpb
-            .build_ref_lists(&sh, pending.poc.frame(), sps.max_frame_num(), |e| (va_ref(e, surfaces), e.mark != RefMark::Unused))
+            .build_ref_lists(&sh, pending.poc.frame(), sps.max_frame_num(), |e| (va_ref(e, surfaces), e.mark != RefMark::Unused, !e.non_existing))
             .map_err(decode_err)?;
         if !sh.slice_type.is_intra() && (lists[0].is_empty() || (sh.slice_type.is_b() && lists[1].is_empty())) {
             return Err(decode_err("no reference pictures available for an inter slice"));
         }
         // a missing reference (the software decoder conceals it with another picture) is not
         // something to hand the hardware
-        if lists.iter().flatten().any(|(_, is_ref)| !is_ref) {
+        if lists.iter().flatten().any(|(_, is_ref, _)| !is_ref) {
             return Err(decode_err("a reference picture is missing"));
         }
-        let refs = lists.map(|l| l.into_iter().map(|(p, _)| p).collect::<Vec<_>>());
+        // An inter slice whose references are all frame_num-gap stand-ins (pictures the hardware
+        // never decoded): the case Mesa's VCN decoder once guarded against (MR 29055, lost in the
+        // 26.1 rewrite, back in 26.1.4 with MR 42256) and that can make the video engine fault.
+        if !sh.slice_type.is_intra() && !lists.iter().flatten().any(|&(_, _, decoded)| decoded) {
+            log::warn!(
+                "decision: decode: VA-API H.264 {} slice of frame_num {} (POC {}) has no decoded reference: its {} references are all frame_num-gap stand-ins",
+                if sh.slice_type.is_b() { "B" } else { "P" },
+                sh.frame_num,
+                pending.poc.frame(),
+                lists.iter().map(Vec::len).sum::<usize>()
+            );
+        }
+        let refs = lists.map(|l| l.into_iter().map(|(p, _, _)| p).collect::<Vec<_>>());
         let params = slice_params(&sh, nal.len(), &refs)?;
         if let Some(p) = self.pending.as_mut() {
             p.slices.push((params, nal.to_vec()));
