@@ -20,7 +20,7 @@ use filmcraft_h264::params::{Pps, Sps};
 use filmcraft_h264::slice::{NalHeader, Poc, PocState, SliceHeader, SliceType, is_new_picture, nal_type};
 
 use super::ffi::{self, VAIQMatrixBufferH264, VAPictureH264, VAPictureParameterBufferH264, VASliceParameterBufferH264, pic_bits, seq_bits};
-use super::{Accel, Held};
+use super::{Accel, InFlight};
 
 /// A picture in the DPB: its surface, field order counts (after an MMCO 5, relative to itself) and
 /// place in decoding order.
@@ -62,7 +62,7 @@ pub struct Front<A: Accel> {
     /// Pictures made so far (decoding order of [`Surface::seq`]).
     seq: u64,
     /// Output pictures not read back yet.
-    held: Held,
+    in_flight: InFlight,
 }
 
 fn decode_err(e: impl std::fmt::Display) -> CodecError {
@@ -90,7 +90,7 @@ impl<A: Accel> Front<A> {
             active_sps: None,
             pending: None,
             seq: 0,
-            held: Held::new(1),
+            in_flight: InFlight::new(1),
         };
         f.load_parameter_sets(parameter_sets)?;
         Ok(f)
@@ -108,7 +108,7 @@ impl<A: Accel> Front<A> {
     /// `depth - 1` surfaces beyond the DPB's.
     #[must_use]
     pub fn with_depth(mut self, depth: usize) -> Self {
-        self.held = Held::new(depth);
+        self.in_flight = InFlight::new(depth);
         self
     }
 
@@ -135,13 +135,13 @@ impl<A: Accel> Front<A> {
         let mut outs = Vec::new();
         self.dpb.flush(&mut outs);
         self.read_out(outs, &mut frames)?;
-        self.held.drain(&mut self.accel, 0, &mut frames)?;
+        self.in_flight.drain(&mut self.accel, 0, &mut frames)?;
         Ok(frames)
     }
 
     /// Forget every picture (after a seek).
     pub fn reset(&mut self) {
-        self.held.clear();
+        self.in_flight.clear();
         self.dpb = Dpb::new();
         self.poc_state = PocState::default();
         self.prev_ref_frame_num = 0;
@@ -152,7 +152,7 @@ impl<A: Accel> Front<A> {
     /// Read back the pictures the DPB output, right away: a surface leaving the DPB is reused by
     /// the next picture.
     fn read_out(&mut self, outs: Vec<Output<Surface>>, frames: &mut Vec<DecodedFrame>) -> Result<()> {
-        self.held.output(&mut self.accel, outs.into_iter().map(|o| (o.frame.index, o.meta.pts)), frames)
+        self.in_flight.output(&mut self.accel, outs.into_iter().map(|o| (o.frame.index, o.meta.pts)), frames)
     }
 
     fn handle_nal(&mut self, nal: &[u8], pts: i64, frames: &mut Vec<DecodedFrame>) -> Result<()> {
@@ -283,7 +283,7 @@ impl<A: Accel> Front<A> {
         self.read_out(outs, frames)?;
         let poc = self.poc_state.compute(sh, sps);
         let target = (0..self.accel.surfaces().len())
-            .find(|&i| !self.dpb.entries.iter().any(|e| e.frame.index == i) && !self.held.holds(i))
+            .find(|&i| !self.dpb.entries.iter().any(|e| e.frame.index == i) && !self.in_flight.holds(i))
             .ok_or_else(|| decode_err("no free surface"))?;
         self.pending = Some(Pending { target, sps: sps.clone(), pps: pps.clone(), first: sh.clone(), poc, pts, slices: Vec::new() });
         Ok(())
@@ -303,8 +303,8 @@ impl<A: Accel> Front<A> {
         self.dpb.fill_frame_num_gap(self.prev_ref_frame_num, sh.frame_num, max, sps.max_num_ref_frames as usize, &mut make, &mut update);
         self.prev_ref_frame_num = (sh.frame_num + max - 1) % max;
         let used: Vec<usize> = self.dpb.entries.iter().map(|e| e.frame.index).filter(|&i| i != UNASSIGNED).collect();
-        let held = &self.held;
-        let mut free = (0..self.accel.surfaces().len()).filter(|i| !used.contains(i) && !held.holds(*i));
+        let in_flight = &self.in_flight;
+        let mut free = (0..self.accel.surfaces().len()).filter(|i| !used.contains(i) && !in_flight.holds(*i));
         let mut fills = Vec::new();
         for e in self.dpb.entries.iter_mut().filter(|e| e.frame.index == UNASSIGNED) {
             let index = free.next().ok_or_else(|| decode_err("no free surface for a frame_num gap"))?;

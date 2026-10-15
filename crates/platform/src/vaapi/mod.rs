@@ -51,12 +51,12 @@ pub fn depth_from_env() -> usize {
 /// Output pictures whose read-back is deferred (see [`DEPTH`]), oldest first: their surfaces are
 /// not reused until they are read. Reads keep output order, so what comes out is exactly what
 /// depth 1 gives, only later.
-pub(crate) struct Held {
+pub(crate) struct InFlight {
     depth: usize,
     queue: VecDeque<(usize, i64)>,
 }
 
-impl Held {
+impl InFlight {
     pub(crate) fn new(depth: usize) -> Self {
         Self { depth: depth.max(1), queue: VecDeque::new() }
     }
