@@ -32,6 +32,52 @@ pub const COMP_ID: &str = "ec.compId";
 pub const COMP_NAME: &str = "ec.compName";
 pub const STAMP: &str = "ec.projectStamp";
 pub const VERSION: &str = "ec.version";
+/// The .ecproj relative to the FilmCraft project's folder (`../Titles/ep1.ecproj`), when they
+/// share a folder: a show folder moved whole keeps its links.
+pub const PROJECT_RELATIVE: &str = "ec.projectRelative";
+
+/// `file` relative to the folder `dir` (both absolute, `/` or `\`), as `../a/b`; `None` on
+/// different roots (drives) or when they share nothing below the root.
+pub fn relative_to(file: &str, dir: &str) -> Option<String> {
+    let split = |p: &str| p.split(['/', '\\']).filter(|c| !c.is_empty() && *c != ".").map(str::to_string).collect::<Vec<_>>();
+    let root = |p: &str| if p.starts_with('/') { "/".to_string() } else { p.chars().take(2).collect() };
+    if root(file) != root(dir) || !(file.starts_with('/') || file.as_bytes().get(1) == Some(&b':')) {
+        return None;
+    }
+    let (f, d) = (split(file), split(dir));
+    let common = f.iter().zip(&d).take_while(|(a, b)| a == b).count();
+    if common <= usize::from(!file.starts_with('/')) || common == f.len() {
+        return None;
+    }
+    let mut out = vec!["..".to_string(); d.len() - common];
+    out.extend(f[common..].iter().cloned());
+    Some(out.join("/"))
+}
+
+/// `rel` ([`relative_to`]) joined to the folder `dir`.
+pub fn join_relative(rel: &str, dir: &str) -> String {
+    let mut p = PathBuf::from(dir);
+    for c in rel.split('/') {
+        if c == ".." {
+            p.pop();
+        } else {
+            p.push(c);
+        }
+    }
+    p.to_string_lossy().into_owned()
+}
+
+/// Where item metadata's .ecproj is now: as stored, or, when that is gone, at its place relative
+/// to the FilmCraft project `fc` (the show folder moved).
+pub fn project_now(meta: &std::collections::BTreeMap<String, String>, fc: Option<&str>) -> Option<String> {
+    let abs = meta.get(PROJECT)?;
+    if Path::new(abs).is_file() {
+        return Some(abs.clone());
+    }
+    let dir = Path::new(fc?).parent()?.to_string_lossy().into_owned();
+    let moved = join_relative(meta.get(PROJECT_RELATIVE)?, &dir);
+    Path::new(&moved).is_file().then_some(moved)
+}
 
 /// The EffectCraft command-line program: `FILMCRAFT_EFFECTCRAFT_CLI`, else `effectcraft-cli` on
 /// `PATH`, else `~/Applications/craft/effectcraft-cli` (where the Craft apps are kept on Linux).
@@ -73,7 +119,13 @@ pub fn link_of(p: &filmcraft_project::Project, id: ItemId) -> Option<(String, St
 /// Open item `id`'s comp in EffectCraft (`--comp`), or leave the copy this session started for
 /// that project to the user when it is still running (no second EffectCraft).
 pub fn open_in_effectcraft(s: &mut Session, id: ItemId) -> Result<Value> {
-    let (ecproj, comp) = link_of(&s.project, id).ok_or_else(|| EngineError::Other("not a linked EffectCraft composition".into()))?;
+    let (_, comp) = link_of(&s.project, id).ok_or_else(|| EngineError::Other("not a linked EffectCraft composition".into()))?;
+    let ecproj = s
+        .project
+        .items
+        .get(&id)
+        .and_then(|it| project_now(&it.metadata, s.path.as_deref()))
+        .ok_or_else(|| EngineError::Other("the linked EffectCraft project was not found".into()))?;
     if let Some(child) = s.link_editors.get_mut(&ecproj)
         && matches!(child.try_wait(), Ok(None))
     {
@@ -205,7 +257,10 @@ pub fn due(s: &Session) -> Vec<Job> {
     let Some(fc) = s.path.clone() else { return Vec::new() };
     let mut jobs = Vec::new();
     for (id, it) in &s.project.items {
-        let (Some(ecproj), Some(comp_id), Some(name)) = (it.metadata.get(PROJECT), it.metadata.get(COMP_ID), it.metadata.get(COMP_NAME)) else { continue };
+        let (Some(ecproj), Some(comp_id), Some(name)) = (project_now(&it.metadata, Some(&fc)), it.metadata.get(COMP_ID), it.metadata.get(COMP_NAME)) else {
+            continue;
+        };
+        let ecproj = &ecproj;
         let now = stamp(ecproj);
         if now.is_none() || now.as_ref() == it.metadata.get(STAMP) {
             continue;
@@ -281,6 +336,9 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(item) = p.items.get_mut(&id) {
         for (k, v) in [(PROJECT, ecproj.clone()), (COMP_ID, cid.to_string()), (COMP_NAME, name.clone()), (VERSION, "1".into())] {
             item.metadata.insert(k.into(), v);
+        }
+        if let Some(rel) = Path::new(&fc).parent().and_then(|d| relative_to(&ecproj, &d.to_string_lossy())) {
+            item.metadata.insert(PROJECT_RELATIVE.into(), rel);
         }
         if let Some(st) = job.stamp {
             item.metadata.insert(STAMP.into(), st);
@@ -440,6 +498,28 @@ mod tests {
         assert_eq!(find_comp(ECPROJ, "Main Title"), Some((1, "Main Title".into())), "a comp, not the solid of that name");
         assert_eq!(find_comp(ECPROJ, "7"), None);
         assert_eq!(find_comp("not json", "1"), None);
+    }
+
+    #[test]
+    fn the_project_is_also_kept_relative_to_the_filmcraft_project() {
+        assert_eq!(relative_to("/shows/ep1/titles/t.ecproj", "/shows/ep1/cut").as_deref(), Some("../titles/t.ecproj"));
+        assert_eq!(relative_to(r"J:\Shows\Ep1\Titles\t.ecproj", r"J:\Shows\Ep1").as_deref(), Some("Titles/t.ecproj"));
+        assert_eq!(relative_to(r"D:\t.ecproj", r"C:\Shows"), None);
+        assert_eq!(relative_to("/other/t.ecproj", "/shows/ep1"), None);
+        assert_eq!(join_relative("../titles/t.ecproj", "/moved/ep1/cut"), "/moved/ep1/titles/t.ecproj");
+        // the stored path gone, the relative one found beside the moved FilmCraft project
+        let dir = std::env::temp_dir().join(format!("fc-link-rel-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Show/Titles")).unwrap();
+        std::fs::write(dir.join("Show/Titles/t.ecproj"), "{}").unwrap();
+        let mut meta = std::collections::BTreeMap::new();
+        meta.insert(PROJECT.to_string(), "/gone/Show/Titles/t.ecproj".to_string());
+        meta.insert(PROJECT_RELATIVE.to_string(), "../Titles/t.ecproj".to_string());
+        let fc = dir.join("Show/Cut/ep.fcproj").to_string_lossy().into_owned();
+        let want = dir.join("Show").join("Titles").join("t.ecproj").to_string_lossy().into_owned();
+        assert_eq!(project_now(&meta, Some(&fc)), Some(want));
+        meta.insert(PROJECT_RELATIVE.to_string(), "../Nowhere/t.ecproj".to_string());
+        assert_eq!(project_now(&meta, Some(&fc)), None, "neither place: the link is broken");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
