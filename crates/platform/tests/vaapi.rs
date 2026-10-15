@@ -272,6 +272,39 @@ fn hevc_main_and_main10_1080p_and_2160p_are_bit_exact() {
     }
 }
 
+/// Pictures kept in flight (`VaDecoder::with_depth`) come out of the hardware byte-identical to
+/// depth 1, in the same order: whole stream with its end, and after `reset` + reseek to each
+/// later sync sample.
+///
+/// Ignored by default: run at depths 2 to 6 on radeonsi (Radeon 8060S, Mesa 26.1.2) together with
+/// the other tests here, the video engine faulted and the kernel reset its ring (see `DEPTH`).
+/// Run it alone, on purpose: `cargo test -p filmcraft-platform --test vaapi -- --ignored pictures_in_flight`.
+#[test]
+#[ignore = "may fault the GPU's video engine on radeonsi; see vaapi::DEPTH"]
+fn pictures_in_flight_are_bit_exact_with_depth_one() {
+    let ff = filmcraft_testkit::require_ffmpeg!();
+    for (name, s) in small_streams(&ff) {
+        let info = || NalStreamInfo::from_entry(&s.entry).unwrap().unwrap();
+        let Ok(mut one) = VaDecoder::with_depth(info(), 1) else {
+            eprintln!("SKIPPED: {name}: no VA-API decoder");
+            continue;
+        };
+        for depth in [2, filmcraft_platform::vaapi::DEPTH, 6] {
+            let mut deep = VaDecoder::with_depth(info(), depth).unwrap();
+            one.reset();
+            let a = decode_all(&mut one, &s.samples);
+            assert_same(&format!("{name} at depth {depth}"), &decode_all(&mut deep, &s.samples), &a);
+            for k in (1..s.samples.len()).filter(|&i| s.sync[i]) {
+                let end = (k + 17).min(s.samples.len());
+                one.reset();
+                deep.reset();
+                let a = decode_all(&mut one, &s.samples[k..end]);
+                assert_same(&format!("{name} at depth {depth} from sample {k}"), &decode_all(&mut deep, &s.samples[k..end]), &a);
+            }
+        }
+    }
+}
+
 #[test]
 fn mid_stream_failure_continues_in_software() {
     let ff = filmcraft_testkit::require_ffmpeg!();
