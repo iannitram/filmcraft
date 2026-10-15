@@ -95,6 +95,9 @@ pub struct Loaded {
     /// What was open when the file was saved (sequence tabs and how each was shown), when the
     /// file records it and it can be read.
     pub view: Option<ProjectView>,
+    /// The folder the file was saved in (ours: media follow a moved project folder), when the
+    /// file records it.
+    pub saved_dir: Option<String>,
 }
 
 impl Loaded {
@@ -117,6 +120,8 @@ struct EnvelopeOut<'a> {
     project: &'a Project,
     #[serde(skip_serializing_if = "Option::is_none")]
     view: Option<&'a ProjectView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    saved_dir: Option<&'a str>, // ours
 }
 
 #[derive(Deserialize)]
@@ -128,12 +133,15 @@ struct EnvelopeIn {
     /// it never stops a project from opening.
     #[serde(default)]
     view: Option<Value>,
+    /// Ours: outside the schema's promises like `view`; builds that do not know it ignore it.
+    #[serde(default)]
+    saved_dir: Option<String>,
 }
 
 impl EnvelopeIn {
     fn loaded(self, schema_version: u32) -> Loaded {
         let view = self.view.and_then(|v| serde_json::from_value(v).ok());
-        Loaded { project: self.project, schema_version, generator: self.generator, view }
+        Loaded { project: self.project, schema_version, generator: self.generator, view, saved_dir: self.saved_dir }
     }
 }
 
@@ -163,7 +171,13 @@ pub fn encode(project: &Project, pretty: bool) -> Vec<u8> {
 /// outside the schema's promises: builds that do not know it ignore it, and it is dropped rather
 /// than migrated when it cannot be read.
 pub fn encode_with_view(project: &Project, view: Option<&ProjectView>, pretty: bool) -> Vec<u8> {
-    let env = EnvelopeOut { format: FORMAT_ID, schema_version: SCHEMA_VERSION, generator: generator(), project, view };
+    encode_at(project, view, None, pretty)
+}
+
+/// Ours: [`encode_with_view`], also recording `saved_dir`, the folder the file is written to, so
+/// that media found beside a moved project folder can follow it on open.
+pub fn encode_at(project: &Project, view: Option<&ProjectView>, saved_dir: Option<&str>, pretty: bool) -> Vec<u8> {
+    let env = EnvelopeOut { format: FORMAT_ID, schema_version: SCHEMA_VERSION, generator: generator(), project, view, saved_dir };
     let r = if pretty { serde_json::to_vec_pretty(&env) } else { serde_json::to_vec(&env) };
     // Serializing plain data (string keys, finite numbers or null) cannot fail.
     r.unwrap_or_default()

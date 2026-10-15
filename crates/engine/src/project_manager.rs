@@ -312,7 +312,7 @@ fn execute(
     if let Some((from, to)) = previews {
         bytes += copy_dir(&from, &to).map_err(|e| format!("copying previews: {e}"))?;
     }
-    let data = filmcraft_format::encode(&proj, false);
+    let data = filmcraft_format::encode_at(&proj, None, crate::media_anchor::folder_of(project_path).as_deref(), false); // ours: the folder
     filmcraft_format::atomic_write(Path::new(project_path), &data).map_err(|e| format!("{project_path}: {e}"))?;
     prog.done.fetch_add(1, Ordering::Relaxed);
     Ok(bytes + data.len() as u64)
