@@ -197,6 +197,7 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
             let start = graphics.clone();
             filmcraft_ui_egui::graphics_notice::GraphicsNotice::new(graphics.mode().label(), Box::new(move || start.reset_to_default()))
         });
+        window_fit::watch(&cc.egui_ctx); // ours
         let confirmed = AtomicBool::new(false);
         cc.egui_ctx.on_end_pass(
             "graphics-start",
