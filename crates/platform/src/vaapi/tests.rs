@@ -469,3 +469,70 @@ fn hevc_pictures_in_flight_come_out_as_at_depth_one() {
         }
     }
 }
+
+/// Warnings logged on each test thread (a process-wide logger, read per thread).
+mod captured {
+    use std::sync::{Mutex, OnceLock};
+
+    struct Capture;
+    static LINES: Mutex<Vec<(std::thread::ThreadId, String)>> = Mutex::new(Vec::new());
+
+    impl log::Log for Capture {
+        fn enabled(&self, m: &log::Metadata) -> bool {
+            m.level() <= log::Level::Warn
+        }
+        fn log(&self, r: &log::Record) {
+            if self.enabled(r.metadata()) {
+                LINES.lock().unwrap().push((std::thread::current().id(), r.args().to_string()));
+            }
+        }
+        fn flush(&self) {}
+    }
+
+    /// Start capturing (once per process) and forget this thread's earlier lines.
+    pub fn start() {
+        static INSTALLED: OnceLock<bool> = OnceLock::new();
+        INSTALLED.get_or_init(|| {
+            let ok = log::set_logger(&Capture).is_ok();
+            log::set_max_level(log::LevelFilter::Warn);
+            ok
+        });
+        let me = std::thread::current().id();
+        LINES.lock().unwrap().retain(|(t, _)| *t != me);
+    }
+
+    /// This thread's lines since [`start`].
+    pub fn lines() -> Vec<String> {
+        let me = std::thread::current().id();
+        LINES.lock().unwrap().iter().filter(|(t, _)| *t == me).map(|(_, l)| l.clone()).collect()
+    }
+}
+
+/// A P picture whose references are all frame_num-gap stand-ins (decoding started mid-GOP, so the
+/// hardware never decoded any picture it predicts from) is logged as a `decision: decode:` line:
+/// the case Mesa's VCN decoder needs a guard for (MR 29055 / 42256). From a sync sample there is
+/// a decoded reference, and no such line.
+#[test]
+fn an_inter_slice_with_no_decoded_reference_is_logged() {
+    let ff = filmcraft_testkit::require_ffmpeg!();
+    let (name, profile, params) = STREAMS[1];
+    let Some(path) = fixture(&ff, name, profile, params) else { return };
+    let s = read_stream(&path);
+    let mut f = front(&s);
+    let no_ref = |l: &String| l.starts_with("decision: decode: VA-API H.264 P slice") && l.contains("has no decoded reference");
+
+    captured::start();
+    run_front(&mut f, &s.samples);
+    assert!(!captured::lines().iter().any(no_ref), "{name} from the start: {:?}", captured::lines());
+
+    // start at the third picture of a GOP, a P picture: frame_num jumps from 0 (after the
+    // reset) to 2, so its references are stand-ins for frames 0 and 1
+    let k = (1..s.samples.len()).find(|&i| !s.sync[i] && !s.sync[i - 1]).unwrap();
+    f.reset();
+    captured::start();
+    for (x, p) in &s.samples[k..k + 3] {
+        f.decode(x, *p).unwrap();
+    }
+    let lines = captured::lines();
+    assert!(lines.iter().any(no_ref), "{name} from sample {k}: {lines:?}");
+}
