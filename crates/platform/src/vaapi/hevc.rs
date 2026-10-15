@@ -18,11 +18,11 @@ use filmcraft_hevc::dpb::{Dpb, Marking, Output, OutputMeta, PocState, Ref, RefPi
 use filmcraft_hevc::params::{Layout, Pps, ScalingList, Sps};
 use filmcraft_hevc::slice::{NalHeader, SliceHeader, SliceType, nal_type};
 
-use super::Accel;
 use super::ffi::{
     self, VAIQMatrixBufferHEVC, VAPictureHEVC, VAPictureParameterBufferHEVC, VASliceParameterBufferHEVC, hevc_pic_bits, hevc_slice_bits,
     hevc_slice_parsing_bits,
 };
+use super::{Accel, InFlight};
 
 /// A picture in the DPB: its surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +69,8 @@ pub struct Front<A: Accel> {
     first_picture: bool,
     skip_rasl: bool,
     after_eos: bool,
+    /// Output pictures not read back yet.
+    in_flight: InFlight,
 }
 
 fn decode_err(e: impl std::fmt::Display) -> CodecError {
@@ -98,12 +100,21 @@ impl<A: Accel> Front<A> {
             first_picture: true,
             skip_rasl: false,
             after_eos: false,
+            in_flight: InFlight::new(1),
         };
         let mut frames = Vec::new();
         for nal in parameter_sets {
             f.handle_nal(nal, 0, &mut frames)?;
         }
         Ok(f)
+    }
+
+    /// Keep `depth` output pictures in flight (see [`super::DEPTH`]); the accelerator needs
+    /// `depth - 1` surfaces beyond the DPB's.
+    #[must_use]
+    pub fn with_depth(mut self, depth: usize) -> Self {
+        self.in_flight = InFlight::new(depth);
+        self
     }
 
     pub fn accel(&self) -> &A {
@@ -129,12 +140,14 @@ impl<A: Accel> Front<A> {
         let mut outs = Vec::new();
         self.dpb.flush(&mut outs);
         self.read_out(outs, &mut frames)?;
+        self.in_flight.drain(&mut self.accel, 0, &mut frames)?;
         self.first_picture = true;
         Ok(frames)
     }
 
     /// Forget every picture (after a seek).
     pub fn reset(&mut self) {
+        self.in_flight.clear();
         self.dpb = Dpb::default();
         self.poc_state = PocState::default();
         self.active_sps = None;
@@ -146,11 +159,7 @@ impl<A: Accel> Front<A> {
 
     /// Read back the pictures the DPB output, right away: a surface leaving the DPB is reused.
     fn read_out(&mut self, outs: Vec<Output<Surface>>, frames: &mut Vec<DecodedFrame>) -> Result<()> {
-        for o in outs {
-            let frame = self.accel.read(o.frame.index).map_err(decode_err)?;
-            frames.push(DecodedFrame { pts: o.meta.pts, frame, draft: false });
-        }
-        Ok(())
+        self.in_flight.output(&mut self.accel, outs.into_iter().map(|o| (o.frame.index, o.meta.pts)), frames)
     }
 
     fn handle_nal(&mut self, nal: &[u8], pts: i64, frames: &mut Vec<DecodedFrame>) -> Result<()> {
@@ -270,7 +279,9 @@ impl<A: Accel> Front<A> {
         }
         self.read_out(outs, frames)?;
         let surfaces = self.accel.surfaces();
-        let target = (0..surfaces.len()).find(|&i| !self.dpb.entries.iter().any(|e| e.frame.index == i)).ok_or_else(|| decode_err("no free surface"))?;
+        let target = (0..surfaces.len())
+            .find(|&i| !self.dpb.entries.iter().any(|e| e.frame.index == i) && !self.in_flight.holds(i))
+            .ok_or_else(|| decode_err("no free surface"))?;
         let target_id = surfaces.get(target).copied().ok_or_else(|| decode_err("surface out of range"))?;
         let mut pic = picture_params(sps, pps, sh)?;
         pic.CurrPic = VAPictureHEVC { picture_id: target_id, pic_order_cnt: poc, flags: 0, va_reserved: [0; ffi::VA_PADDING_LOW] };
