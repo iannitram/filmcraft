@@ -272,6 +272,44 @@ fn hevc_main_and_main10_1080p_and_2160p_are_bit_exact() {
     }
 }
 
+/// Pictures kept in flight (`VaDecoder::with_depth`) come out of the hardware byte-identical to
+/// depth 1, in the same order: whole stream with its end, and after `reset` + reseek to each
+/// later sync sample.
+///
+#[test]
+fn pictures_in_flight_are_bit_exact_with_depth_one() {
+    let ff = filmcraft_testkit::require_ffmpeg!();
+    for (name, s) in small_streams(&ff) {
+        let info = || NalStreamInfo::from_entry(&s.entry).unwrap().unwrap();
+        let Ok(mut one) = VaDecoder::with_depth(info(), 1) else {
+            eprintln!("SKIPPED: {name}: no VA-API decoder");
+            continue;
+        };
+        for depth in [2, filmcraft_platform::vaapi::DEPTH, 6] {
+            let mut deep = VaDecoder::with_depth(info(), depth).unwrap();
+            one.reset();
+            let a = decode_all(&mut one, &s.samples);
+            assert_same(&format!("{name} at depth {depth}"), &decode_all(&mut deep, &s.samples), &a);
+            for k in (1..s.samples.len()).filter(|&i| s.sync[i]) {
+                let end = (k + 17).min(s.samples.len());
+                one.reset();
+                deep.reset();
+                let mut a = decode_all(&mut one, &s.samples[k..end]);
+                let mut b = decode_all(&mut deep, &s.samples[k..end]);
+                assert_eq!(a.len(), b.len(), "{name} at depth {depth} from sample {k}: pictures");
+                // after a seek to an open-GOP I picture, the pictures shown before it are concealed
+                // (predicted from frames never decoded): only those from the seek point on must match
+                if info().codec == filmcraft_codecs::hw::NalCodec::H264 && !info().nal_types(&s.samples[k].0).contains(&5) {
+                    let start = s.samples[k].1;
+                    a.retain(|f| f.pts >= start);
+                    b.retain(|f| f.pts >= start);
+                }
+                assert_same(&format!("{name} at depth {depth} from sample {k}"), &b, &a);
+            }
+        }
+    }
+}
+
 #[test]
 fn mid_stream_failure_continues_in_software() {
     let ff = filmcraft_testkit::require_ffmpeg!();

@@ -23,6 +23,10 @@ use crate::biplanar::{self, Biplanar, Geometry};
 struct Recorder {
     ids: Vec<ffi::VASurfaceID>,
     decoded: Vec<bool>,
+    /// Which picture (decoding order; `usize::MAX` for mid-gray) each surface holds.
+    content: Vec<usize>,
+    /// Surfaces holding a stand-in ([`Accel::fill`]) rather than a picture the hardware decoded.
+    filled: Vec<bool>,
     pictures: usize,
     frame: VideoFrame,
 }
@@ -31,7 +35,14 @@ impl Recorder {
     fn new(count: usize) -> Self {
         let g = Geometry { crop: (0, 0, 2, 2), bits: 8, color: Default::default(), par: (1, 1) };
         let frame = biplanar::to_frame(&Biplanar { luma: &[128; 4], chroma: &[128; 2], stride: 2, rows: 2 }, &g).unwrap();
-        Self { ids: (0..count as u32).map(|i| 0x100 + i).collect(), decoded: vec![false; count], pictures: 0, frame }
+        Self {
+            ids: (0..count as u32).map(|i| 0x100 + i).collect(),
+            decoded: vec![false; count],
+            content: vec![usize::MAX; count],
+            filled: vec![false; count],
+            pictures: 0,
+            frame,
+        }
     }
 }
 
@@ -85,6 +96,7 @@ impl Accel for Recorder {
             }
         }
         self.decoded[target] = true;
+        self.content[target] = self.pictures;
         self.pictures += 1;
         Ok(())
     }
@@ -104,6 +116,9 @@ impl Accel for Recorder {
         for r in &refs {
             let i = self.ids.iter().position(|&id| id == r.picture_id).expect("reference is a decoder surface");
             assert!(self.decoded[i], "reference surface {i} holds a picture");
+            // never a stand-in ([`Accel::fill`]): a driver keeping its own copy of each picture it
+            // decoded has none for one (and list entries are reference frames, checked below)
+            assert!(!self.filled[i], "reference surface {i} holds a picture the hardware decoded, not a stand-in");
             assert!(r.flags & (ffi::VA_PICTURE_H264_SHORT_TERM_REFERENCE | ffi::VA_PICTURE_H264_LONG_TERM_REFERENCE) != 0, "reference flags");
         }
         assert!(!slices.is_empty());
@@ -124,18 +139,25 @@ impl Accel for Recorder {
             }
         }
         self.decoded[target] = true;
+        self.content[target] = self.pictures;
+        self.filled[target] = false;
         self.pictures += 1;
         Ok(())
     }
 
     fn read(&mut self, index: usize) -> Result<VideoFrame, String> {
         assert!(self.decoded[index], "read back a decoded surface");
-        Ok(self.frame.clone())
+        // the frame says which picture the surface held when it was read
+        let mut frame = self.frame.clone();
+        frame.pts = filmcraft_time::Tick(self.content[index] as i64);
+        Ok(frame)
     }
 
     fn fill(&mut self, index: usize, from: Option<usize>) -> Result<(), String> {
         assert!(from.is_none_or(|f| self.decoded[f]));
         self.decoded[index] = true;
+        self.content[index] = from.map_or(usize::MAX, |f| self.content[f]);
+        self.filled[index] = true;
         Ok(())
     }
 }
@@ -378,4 +400,153 @@ fn hevc_damaged_samples_are_errors() {
         }
         let _ = f.flush();
     }
+}
+
+/// (pts, which decoded picture) of every frame out of `decode` calls over `samples`, then `flush`.
+fn run_tagged(
+    samples: &[(Vec<u8>, i64)],
+    decode: &mut dyn FnMut(&[u8], i64) -> Vec<DecodedFrame>,
+    flush: &mut dyn FnMut() -> Vec<DecodedFrame>,
+) -> Vec<(i64, i64)> {
+    let tag = |f: &DecodedFrame| (f.pts, f.frame.pts.0);
+    let mut out = Vec::new();
+    for (s, p) in samples {
+        out.extend(decode(s, *p).iter().map(tag));
+    }
+    out.extend(flush().iter().map(tag));
+    out
+}
+
+/// Pictures kept in flight come out exactly as at depth 1: same pictures, same order (each frame
+/// is tagged with the decode it came from, so a held surface reused before it was read, or a
+/// reordering, fails), over the whole stream, after a seek to every sync sample, and with a flush
+/// mid-GOP; at the end of the stream nothing is left behind.
+#[test]
+fn pictures_in_flight_come_out_as_at_depth_one() {
+    let ff = filmcraft_testkit::require_ffmpeg!();
+    for (name, profile, params) in STREAMS {
+        let Some(path) = fixture(&ff, name, profile, params) else { continue };
+        let s = read_stream(&path);
+        for depth in [2, 4] {
+            // both count decodes from the same start, so the tags compare
+            let mut one = front(&s);
+            let mut deep = front(&s).with_depth(depth);
+            let run = |f: &mut Front<Recorder>, samples: &[(Vec<u8>, i64)]| {
+                let f = std::cell::RefCell::new(f);
+                run_tagged(samples, &mut |x, p| f.borrow_mut().decode(x, p).unwrap(), &mut || f.borrow_mut().flush().unwrap())
+            };
+            let a = run(&mut one, &s.samples);
+            assert_eq!(a.len(), s.samples.len(), "{name}: every picture out at depth 1");
+            assert_eq!(run(&mut deep, &s.samples), a, "{name} at depth {depth}");
+            for k in (1..s.samples.len()).filter(|&i| s.sync[i]) {
+                one.reset();
+                deep.reset();
+                let end = (k + 13).min(s.samples.len());
+                assert_eq!(run(&mut deep, &s.samples[k..end]), run(&mut one, &s.samples[k..end]), "{name} at depth {depth} from sample {k}");
+            }
+            one.reset();
+            deep.reset();
+            let mid = s.samples.len() / 2 + 1;
+            let mut a = run(&mut one, &s.samples[..mid]);
+            a.extend(run(&mut one, &s.samples[mid..]));
+            let mut b = run(&mut deep, &s.samples[..mid]);
+            b.extend(run(&mut deep, &s.samples[mid..]));
+            assert_eq!(b, a, "{name} at depth {depth} with a flush at {mid}");
+        }
+    }
+}
+
+/// HEVC: [`pictures_in_flight_come_out_as_at_depth_one`].
+#[test]
+fn hevc_pictures_in_flight_come_out_as_at_depth_one() {
+    let ff = filmcraft_testkit::require_ffmpeg!();
+    for (name, pix_fmt, params) in HEVC_STREAMS {
+        let Some(path) = hevc_fixture(&ff, name, pix_fmt, params) else { continue };
+        let s = read_stream(&path);
+        for depth in [2, 4] {
+            // both count decodes from the same start, so the tags compare
+            let mut one = hevc_front(&s);
+            let mut deep = hevc_front(&s).with_depth(depth);
+            let run = |f: &mut super::hevc::Front<Recorder>, samples: &[(Vec<u8>, i64)]| {
+                let f = std::cell::RefCell::new(f);
+                run_tagged(samples, &mut |x, p| f.borrow_mut().decode(x, p).unwrap(), &mut || f.borrow_mut().flush().unwrap())
+            };
+            let a = run(&mut one, &s.samples);
+            assert!(!a.is_empty(), "{name}");
+            assert_eq!(run(&mut deep, &s.samples), a, "{name} at depth {depth}");
+            for k in (1..s.samples.len()).filter(|&i| s.sync[i]) {
+                one.reset();
+                deep.reset();
+                let end = (k + 13).min(s.samples.len());
+                assert_eq!(run(&mut deep, &s.samples[k..end]), run(&mut one, &s.samples[k..end]), "{name} at depth {depth} from sample {k}");
+            }
+        }
+    }
+}
+
+/// Warnings logged on each test thread (a process-wide logger, read per thread).
+mod captured {
+    use std::sync::{Mutex, OnceLock};
+
+    struct Capture;
+    static LINES: Mutex<Vec<(std::thread::ThreadId, String)>> = Mutex::new(Vec::new());
+
+    impl log::Log for Capture {
+        fn enabled(&self, m: &log::Metadata) -> bool {
+            m.level() <= log::Level::Warn
+        }
+        fn log(&self, r: &log::Record) {
+            if self.enabled(r.metadata()) {
+                LINES.lock().unwrap().push((std::thread::current().id(), r.args().to_string()));
+            }
+        }
+        fn flush(&self) {}
+    }
+
+    /// Start capturing (once per process) and forget this thread's earlier lines.
+    pub fn start() {
+        static INSTALLED: OnceLock<bool> = OnceLock::new();
+        INSTALLED.get_or_init(|| {
+            let ok = log::set_logger(&Capture).is_ok();
+            log::set_max_level(log::LevelFilter::Warn);
+            ok
+        });
+        let me = std::thread::current().id();
+        LINES.lock().unwrap().retain(|(t, _)| *t != me);
+    }
+
+    /// This thread's lines since [`start`].
+    pub fn lines() -> Vec<String> {
+        let me = std::thread::current().id();
+        LINES.lock().unwrap().iter().filter(|(t, _)| *t == me).map(|(_, l)| l.clone()).collect()
+    }
+}
+
+/// A P picture whose references are all frame_num-gap stand-ins (decoding started mid-GOP, so the
+/// hardware never decoded any picture it predicts from) is logged as a `decision: decode:` line:
+/// the case Mesa's VCN decoder needs a guard for (MR 29055 / 42256). From a sync sample there is
+/// a decoded reference, and no such line.
+#[test]
+fn an_inter_slice_with_no_decoded_reference_is_logged() {
+    let ff = filmcraft_testkit::require_ffmpeg!();
+    let (name, profile, params) = STREAMS[1];
+    let Some(path) = fixture(&ff, name, profile, params) else { return };
+    let s = read_stream(&path);
+    let mut f = front(&s);
+    let no_ref = |l: &String| l.starts_with("decision: decode: VA-API H.264 P slice") && l.contains("has no decoded reference");
+
+    captured::start();
+    run_front(&mut f, &s.samples);
+    assert!(!captured::lines().iter().any(no_ref), "{name} from the start: {:?}", captured::lines());
+
+    // start at the third picture of a GOP, a P picture: frame_num jumps from 0 (after the
+    // reset) to 2, so its references are stand-ins for frames 0 and 1
+    let k = (1..s.samples.len()).find(|&i| !s.sync[i] && !s.sync[i - 1]).unwrap();
+    f.reset();
+    captured::start();
+    for (x, p) in &s.samples[k..k + 3] {
+        f.decode(x, *p).unwrap();
+    }
+    let lines = captured::lines();
+    assert!(lines.iter().any(no_ref), "{name} from sample {k}: {lines:?}");
 }

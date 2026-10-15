@@ -7,7 +7,9 @@
 //! them to an [`Accel`] (the libva session on Linux, a recording stand-in in tests), then reads
 //! back the pictures the DPB outputs. What the hardware path does not take is an error, so the
 //! hybrid decoder replays the run in software: field / MBAFF coding, FMO, SP / SI and data
-//! partitioning, stream changes the surfaces were not made for.
+//! partitioning, stream changes the surfaces were not made for, pictures predicted from a
+//! frame_num gap. After a start at a non-IDR picture (an open-GOP seek) the leading pictures,
+//! predicted from frames before the start, are concealed ([`Held::Missing`]).
 //!
 //! Safe code; compiled on every target so its logic is tested everywhere.
 
@@ -19,17 +21,36 @@ use filmcraft_h264::dpb::{Dpb, DpbEntry, Output, OutputMeta, RefMark};
 use filmcraft_h264::params::{Pps, Sps};
 use filmcraft_h264::slice::{NalHeader, Poc, PocState, SliceHeader, SliceType, is_new_picture, nal_type};
 
-use super::Accel;
 use super::ffi::{self, VAIQMatrixBufferH264, VAPictureH264, VAPictureParameterBufferH264, VASliceParameterBufferH264, pic_bits, seq_bits};
+use super::{Accel, InFlight};
 
-/// A picture in the DPB: its surface, field order counts (after an MMCO 5, relative to itself) and
-/// place in decoding order.
+/// A picture in the DPB: its surface, field order counts (after an MMCO 5, relative to itself),
+/// place in decoding order and what the surface holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Surface {
     pub index: usize,
     pub top: i32,
     pub bottom: i32,
     pub seq: u64,
+    pub held: Held,
+}
+
+/// What a DPB surface holds. Only decoded pictures are handed to the hardware as references: a
+/// driver that keeps its own copy of each picture it decoded (Mesa radeonsi, VCN dynamic DPB) has
+/// none for a stand-in, and given one it fails the picture (Mesa 26.1: vaEndPicture) or, with
+/// damaged data, faults and resets the decoder ring.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Held {
+    /// A picture the hardware decoded.
+    Decoded,
+    /// A stand-in (a copy of another picture, or mid-gray) for a frame from before the start of
+    /// the run, which began at a non-IDR picture (an open-GOP seek), or a picture predicted from
+    /// one: the leading pictures shown before the start point, concealed (8.2.5.2 gap frames,
+    /// then the pictures that list them).
+    Missing,
+    /// A stand-in for a frame_num gap within the stream: what is predicted from it is decoded in
+    /// software.
+    Gap,
 }
 
 /// A frame_num gap frame not given a surface yet.
@@ -38,6 +59,8 @@ const UNASSIGNED: usize = usize::MAX;
 /// The picture whose slices are being collected.
 struct Pending {
     target: usize,
+    /// Predicted from [`Held::Missing`] stand-ins: concealed, not decoded.
+    conceal: bool,
     sps: Arc<Sps>,
     pps: Arc<Pps>,
     first: SliceHeader,
@@ -61,6 +84,8 @@ pub struct Front<A: Accel> {
     pending: Option<Pending>,
     /// Pictures made so far (decoding order of [`Surface::seq`]).
     seq: u64,
+    /// Output pictures not read back yet.
+    in_flight: InFlight,
 }
 
 fn decode_err(e: impl std::fmt::Display) -> CodecError {
@@ -88,6 +113,7 @@ impl<A: Accel> Front<A> {
             active_sps: None,
             pending: None,
             seq: 0,
+            in_flight: InFlight::new(1),
         };
         f.load_parameter_sets(parameter_sets)?;
         Ok(f)
@@ -99,6 +125,14 @@ impl<A: Accel> Front<A> {
             self.handle_nal(nal, 0, &mut frames)?;
         }
         Ok(())
+    }
+
+    /// Keep `depth` output pictures in flight (see [`super::DEPTH`]); the accelerator needs
+    /// `depth - 1` surfaces beyond the DPB's.
+    #[must_use]
+    pub fn with_depth(mut self, depth: usize) -> Self {
+        self.in_flight = InFlight::new(depth);
+        self
     }
 
     pub fn accel(&self) -> &A {
@@ -124,11 +158,13 @@ impl<A: Accel> Front<A> {
         let mut outs = Vec::new();
         self.dpb.flush(&mut outs);
         self.read_out(outs, &mut frames)?;
+        self.in_flight.drain(&mut self.accel, 0, &mut frames)?;
         Ok(frames)
     }
 
     /// Forget every picture (after a seek).
     pub fn reset(&mut self) {
+        self.in_flight.clear();
         self.dpb = Dpb::new();
         self.poc_state = PocState::default();
         self.prev_ref_frame_num = 0;
@@ -139,11 +175,7 @@ impl<A: Accel> Front<A> {
     /// Read back the pictures the DPB output, right away: a surface leaving the DPB is reused by
     /// the next picture.
     fn read_out(&mut self, outs: Vec<Output<Surface>>, frames: &mut Vec<DecodedFrame>) -> Result<()> {
-        for o in outs {
-            let frame = self.accel.read(o.frame.index).map_err(decode_err)?;
-            frames.push(DecodedFrame { pts: o.meta.pts, frame, draft: false });
-        }
-        Ok(())
+        self.in_flight.output(&mut self.accel, outs.into_iter().map(|o| (o.frame.index, o.meta.pts)), frames)
     }
 
     fn handle_nal(&mut self, nal: &[u8], pts: i64, frames: &mut Vec<DecodedFrame>) -> Result<()> {
@@ -215,19 +247,36 @@ impl<A: Accel> Front<A> {
         let surfaces = self.accel.surfaces();
         let lists = self
             .dpb
-            .build_ref_lists(&sh, pending.poc.frame(), sps.max_frame_num(), |e| (va_ref(e, surfaces), e.mark != RefMark::Unused))
+            .build_ref_lists(&sh, pending.poc.frame(), sps.max_frame_num(), |e| (va_ref(e, surfaces), e.mark != RefMark::Unused, e.frame.held))
             .map_err(decode_err)?;
         if !sh.slice_type.is_intra() && (lists[0].is_empty() || (sh.slice_type.is_b() && lists[1].is_empty())) {
             return Err(decode_err("no reference pictures available for an inter slice"));
         }
         // a missing reference (the software decoder conceals it with another picture) is not
         // something to hand the hardware
-        if lists.iter().flatten().any(|(_, is_ref)| !is_ref) {
+        if lists.iter().flatten().any(|(_, is_ref, _)| !is_ref) {
             return Err(decode_err("a reference picture is missing"));
         }
-        let refs = lists.map(|l| l.into_iter().map(|(p, _)| p).collect::<Vec<_>>());
+        if lists.iter().flatten().any(|(_, _, held)| *held == Held::Gap) {
+            return Err(unsupported("a picture predicted from a frame_num gap"));
+        }
+        let conceal = lists.iter().flatten().any(|(_, _, held)| *held == Held::Missing);
+        // An inter slice none of whose references the hardware decoded (all concealed stand-ins):
+        // the case Mesa's VCN decoder once guarded against (MR 29055, lost in the 26.1 rewrite,
+        // back in 26.1.4 with MR 42256) and that can make the video engine fault.
+        if !sh.slice_type.is_intra() && !lists.iter().flatten().any(|(_, _, held)| *held == Held::Decoded) {
+            log::warn!(
+                "decision: decode: VA-API H.264 {} slice of frame_num {} (POC {}) has no decoded reference: its {} references are all stand-ins",
+                if sh.slice_type.is_b() { "B" } else { "P" },
+                sh.frame_num,
+                pending.poc.frame(),
+                lists.iter().map(Vec::len).sum::<usize>()
+            );
+        }
+        let refs = lists.map(|l| l.into_iter().map(|(p, _, _)| p).collect::<Vec<_>>());
         let params = slice_params(&sh, nal.len(), &refs)?;
         if let Some(p) = self.pending.as_mut() {
+            p.conceal |= conceal;
             p.slices.push((params, nal.to_vec()));
         }
         Ok(())
@@ -261,32 +310,36 @@ impl<A: Accel> Front<A> {
         }
         self.read_out(outs, frames)?;
         let poc = self.poc_state.compute(sh, sps);
-        let target =
-            (0..self.accel.surfaces().len()).find(|&i| !self.dpb.entries.iter().any(|e| e.frame.index == i)).ok_or_else(|| decode_err("no free surface"))?;
-        self.pending = Some(Pending { target, sps: sps.clone(), pps: pps.clone(), first: sh.clone(), poc, pts, slices: Vec::new() });
+        let target = (0..self.accel.surfaces().len())
+            .find(|&i| !self.dpb.entries.iter().any(|e| e.frame.index == i) && !self.in_flight.holds(i))
+            .ok_or_else(|| decode_err("no free surface"))?;
+        self.pending = Some(Pending { target, conceal: false, sps: sps.clone(), pps: pps.clone(), first: sh.clone(), poc, pts, slices: Vec::new() });
         Ok(())
     }
 
     /// frame_num gap (8.2.5.2; also every start at a non-IDR picture, an open-GOP seek): "non-existing"
     /// frames as the software decoder makes them, copies of the latest decoded frame (mid-gray when
-    /// there is none), so pictures predicted from them come out the same.
+    /// there is none). They are never references for the hardware ([`Held`]).
     fn fill_frame_num_gap(&mut self, sh: &SliceHeader, sps: &Arc<Sps>, pts: i64) -> Result<()> {
         let max = sps.max_frame_num();
-        let last = self.dpb.entries.iter().filter(|e| !e.non_existing).max_by_key(|e| e.frame.seq).map(|e| e.frame.index);
+        let last = self.last_decoded();
+        // nothing decoded yet in this run: the frames are from before its start
+        let held = if last.is_some() { Held::Gap } else { Held::Missing };
         let meta = Arc::new(output_meta(sps, pts, false));
         let poc_state = &mut self.poc_state;
         // surfaces are given afterwards, to the frames the sliding window keeps
-        let mut make = |_| (Surface { index: UNASSIGNED, top: 0, bottom: 0, seq: 0 }, 0, meta.clone());
+        let mut make = |_| (Surface { index: UNASSIGNED, top: 0, bottom: 0, seq: 0, held }, 0, meta.clone());
         let mut update = |frame_num| poc_state.update_gap_frame(frame_num, sps);
         self.dpb.fill_frame_num_gap(self.prev_ref_frame_num, sh.frame_num, max, sps.max_num_ref_frames as usize, &mut make, &mut update);
         self.prev_ref_frame_num = (sh.frame_num + max - 1) % max;
         let used: Vec<usize> = self.dpb.entries.iter().map(|e| e.frame.index).filter(|&i| i != UNASSIGNED).collect();
-        let mut free = (0..self.accel.surfaces().len()).filter(|i| !used.contains(i));
+        let in_flight = &self.in_flight;
+        let mut free = (0..self.accel.surfaces().len()).filter(|i| !used.contains(i) && !in_flight.holds(*i));
         let mut fills = Vec::new();
         for e in self.dpb.entries.iter_mut().filter(|e| e.frame.index == UNASSIGNED) {
             let index = free.next().ok_or_else(|| decode_err("no free surface for a frame_num gap"))?;
             self.seq += 1;
-            e.frame = Surface { index, top: 0, bottom: 0, seq: self.seq };
+            e.frame = Surface { index, top: 0, bottom: 0, seq: self.seq, held };
             fills.push(index);
         }
         for index in fills {
@@ -295,7 +348,13 @@ impl<A: Accel> Front<A> {
         Ok(())
     }
 
-    /// Decode the collected picture, then do its reference marking and DPB insertion.
+    /// The surface of the latest picture the hardware decoded.
+    fn last_decoded(&self) -> Option<usize> {
+        self.dpb.entries.iter().filter(|e| e.frame.held == Held::Decoded).max_by_key(|e| e.frame.seq).map(|e| e.frame.index)
+    }
+
+    /// Decode the collected picture (or conceal it, see [`Held::Missing`]), then do its reference
+    /// marking and DPB insertion.
     fn submit_pending(&mut self, frames: &mut Vec<DecodedFrame>) -> Result<()> {
         let Some(p) = self.pending.take() else { return Ok(()) };
         if p.slices.is_empty() {
@@ -315,11 +374,21 @@ impl<A: Accel> Front<A> {
             BottomFieldOrderCnt: p.poc.bottom,
             va_reserved: [0; ffi::VA_PADDING_LOW],
         };
-        for (slot, e) in pic.ReferenceFrames.iter_mut().zip(self.dpb.entries.iter().filter(|e| e.mark != RefMark::Unused)) {
+        // stand-ins are not listed: no picture handed to the hardware is predicted from one, and
+        // leaving out entries no list uses keeps the lists the hardware builds the same
+        let decoded = self.dpb.entries.iter().filter(|e| e.mark != RefMark::Unused && e.frame.held == Held::Decoded);
+        for (slot, e) in pic.ReferenceFrames.iter_mut().zip(decoded) {
             *slot = va_ref(e, surfaces);
         }
-        let iq = iq_matrix(&p.pps);
-        self.accel.decode_h264(p.target, &pic, &iq, &p.slices).map_err(decode_err)?;
+        let held = if p.conceal {
+            let last = self.last_decoded();
+            self.accel.fill(p.target, last).map_err(decode_err)?;
+            Held::Missing
+        } else {
+            let iq = iq_matrix(&p.pps);
+            self.accel.decode_h264(p.target, &pic, &iq, &p.slices).map_err(decode_err)?;
+            Held::Decoded
+        };
 
         self.poc_state.update(&p.first, &p.poc);
         let mmco5 = p.first.has_mmco5();
@@ -329,7 +398,7 @@ impl<A: Accel> Front<A> {
         // MMCO 5: the picture's order counts become relative to itself (tempPicOrderCnt, 8.2.1)
         let temp = if mmco5 { p.poc.frame() } else { 0 };
         self.seq += 1;
-        let surface = Surface { index: p.target, top: p.poc.top.wrapping_sub(temp), bottom: p.poc.bottom.wrapping_sub(temp), seq: self.seq };
+        let surface = Surface { index: p.target, top: p.poc.top.wrapping_sub(temp), bottom: p.poc.bottom.wrapping_sub(temp), seq: self.seq, held };
         let fpoc = if mmco5 { 0 } else { p.poc.frame() };
         let meta = Arc::new(output_meta(&p.sps, p.pts, p.first.idr));
         let mut outs = Vec::new();
