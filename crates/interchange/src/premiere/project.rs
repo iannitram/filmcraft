@@ -315,7 +315,8 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                 imported_track.muted = self.graph.boolean(track, &["ClipTrack", "Track", "IsMuted"], false)?;
                 imported_track.enabled = !imported_track.muted;
                 for item in self.graph.references(track, &["ClipTrack", "ClipItems", "TrackItems"])? {
-                    let start = self.graph.required_integer(item, &["ClipTrackItem", "TrackItem", "Start"])?;
+                    // a value at its default is not written: an item at the very start of its track has no Start
+                    let start = self.graph.integer(item, &["ClipTrackItem", "TrackItem", "Start"], 0)?;
                     let end = self.graph.required_integer(item, &["ClipTrackItem", "TrackItem", "End"])?;
                     let duration = end.checked_sub(start).filter(|d| start >= 0 && *d > 0).ok_or_else(|| error(PROJECT, "invalid clip timeline range"))?;
                     if end > super::MAX_TIME_TICKS {
@@ -574,7 +575,8 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                 )),
             }
         }
-        let start = self.graph.required_integer(node, &["TransitionTrackItem", "TrackItem", "Start"])?;
+        // as for a clip: a transition at the very start of its track has no Start
+        let start = self.graph.integer(node, &["TransitionTrackItem", "TrackItem", "Start"], 0)?;
         let end = self.graph.required_integer(node, &["TransitionTrackItem", "TrackItem", "End"])?;
         let duration = end.checked_sub(start).filter(|d| start >= 0 && *d > 0).ok_or_else(|| error(PROJECT, "invalid transition range"))?;
         if end > super::MAX_TIME_TICKS {
