@@ -720,6 +720,25 @@ pub struct LinkMediaDraft {
     /// Rows the user set offline in this session of the dialog (item ids).
     pub skipped: Vec<u64>,
     pub message: String,
+    /// What "Suggest by episode number" found for the selected row. Nothing here is linked until
+    /// its "Link this one" is clicked.
+    pub suggestions: Vec<LinkSuggestion>,
+}
+
+/// One file `media.relinkSuggest` found for a missing episode file: the same show's same episode
+/// under another name, with its length beside the length the project recorded.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LinkSuggestion {
+    pub path: String,
+    /// The length of the file found, in seconds.
+    pub seconds: f64,
+    /// The length the project recorded for the missing file, in seconds.
+    pub recorded_seconds: f64,
+    /// Found minus recorded, in frames of the missing file's rate (when that rate is known).
+    pub difference_frames: Option<i64>,
+    /// More than a second longer or shorter than the recording: listed, never offered.
+    pub other_cut: bool,
 }
 
 impl Default for LinkMediaDraft {
@@ -740,6 +759,7 @@ impl Default for LinkMediaDraft {
             candidate: None,
             skipped: vec![],
             message: String::new(),
+            suggestions: vec![],
         }
     }
 }
