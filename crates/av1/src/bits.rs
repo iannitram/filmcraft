@@ -122,3 +122,124 @@ pub(crate) fn leb128(data: &[u8]) -> Result<(u64, usize)> {
     }
     Ok((v, 8))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn f_reads_msb_first() {
+        let mut r = BitReader::new(&[0b1011_0000]);
+        assert_eq!(r.f(4).unwrap(), 11);
+        assert_eq!(r.position(), 4);
+        assert_eq!(r.f(4).unwrap(), 0);
+    }
+
+    #[test]
+    fn f_32_bits() {
+        let mut r = BitReader::new(&[0x12, 0x34, 0x56, 0x78]);
+        assert_eq!(r.f(32).unwrap(), 0x1234_5678);
+    }
+
+    #[test]
+    fn flag_reads_one_bit() {
+        let mut r = BitReader::new(&[0b1000_0000]);
+        assert!(r.flag().unwrap());
+        assert!(!r.flag().unwrap());
+        assert_eq!(r.position(), 2);
+    }
+
+    #[test]
+    fn uvlc_small_values() {
+        let mut r = BitReader::new(&[0b1010_0110, 0b0100_0000]);
+        assert_eq!(r.uvlc().unwrap(), 0); // code 1
+        assert_eq!(r.uvlc().unwrap(), 1); // code 010
+        assert_eq!(r.uvlc().unwrap(), 2); // code 011
+        assert_eq!(r.uvlc().unwrap(), 3); // code 00100
+        assert_eq!(r.position(), 12);
+    }
+
+    #[test]
+    fn uvlc_32_leading_zeros_is_max() {
+        let mut r = BitReader::new(&[0, 0, 0, 0, 0b1000_0000, 0, 0, 0, 0]);
+        assert_eq!(r.uvlc().unwrap(), u32::MAX);
+    }
+
+    #[test]
+    fn uvlc_too_many_zeros_is_invalid() {
+        let mut r = BitReader::new(&[0u8; 6]);
+        assert!(matches!(r.uvlc(), Err(Error::Invalid(_))));
+    }
+
+    #[test]
+    fn truncated_read_is_error() {
+        let mut r = BitReader::new(&[0xFF]);
+        assert_eq!(r.f(8).unwrap(), 255);
+        assert!(matches!(r.f(1), Err(Error::Truncated)));
+    }
+
+    #[test]
+    fn le_little_endian() {
+        let mut r = BitReader::new(&[0x34, 0x12, 0x78, 0x56, 0x34, 0x12]);
+        assert_eq!(r.le(2).unwrap(), 0x1234);
+        assert_eq!(r.le(4).unwrap(), 0x1234_5678);
+    }
+
+    #[test]
+    fn leb128_reader_spec_example() {
+        let mut r = BitReader::new(&[0xE5, 0x8E, 0x26]);
+        assert_eq!(r.leb128().unwrap(), 624_485);
+        assert_eq!(r.position(), 24);
+    }
+
+    #[test]
+    fn leb128_free_function() {
+        assert_eq!(leb128(&[0xE5, 0x8E, 0x26]).unwrap(), (624_485, 3));
+        assert_eq!(leb128(&[0x00]).unwrap(), (0, 1));
+        assert_eq!(leb128(&[0x7F]).unwrap(), (127, 1));
+        assert_eq!(leb128(&[0x80, 0x01]).unwrap(), (128, 2));
+        assert!(matches!(leb128(&[0x80]), Err(Error::Truncated)));
+        assert_eq!(leb128(&[0x80; 8]).unwrap(), (0, 8));
+    }
+
+    #[test]
+    fn su_signed_values() {
+        let mut r = BitReader::new(&[0b1111_0111, 0b1000_0000]);
+        assert_eq!(r.su(4).unwrap(), -1); // 1111 = -1
+        assert_eq!(r.su(4).unwrap(), 7); // 0111 = 7
+        assert_eq!(r.su(4).unwrap(), -8); // 1000 = -8
+    }
+
+    #[test]
+    fn ns_non_symmetric() {
+        let mut r = BitReader::new(&[0b0001_1011, 0b0111_0000]);
+        assert_eq!(r.ns(5).unwrap(), 0); // code 00
+        assert_eq!(r.ns(5).unwrap(), 1); // code 01
+        assert_eq!(r.ns(5).unwrap(), 2); // code 10
+        assert_eq!(r.ns(5).unwrap(), 3); // code 110
+        assert_eq!(r.ns(5).unwrap(), 4); // code 111
+        assert_eq!(r.position(), 12);
+    }
+
+    #[test]
+    fn ns_of_one_reads_nothing() {
+        let mut r = BitReader::new(&[0xFF]);
+        assert_eq!(r.ns(1).unwrap(), 0);
+        assert_eq!(r.ns(0).unwrap(), 0);
+        assert_eq!(r.position(), 0);
+    }
+
+    #[test]
+    fn byte_align_and_byte_pos() {
+        let mut r = BitReader::new(&[0xFF, 0xFF]);
+        assert_eq!(r.byte_pos(), 0);
+        r.f(3).unwrap();
+        assert_eq!(r.byte_pos(), 1);
+        r.byte_align();
+        assert_eq!(r.position(), 8);
+        r.byte_align();
+        assert_eq!(r.position(), 8);
+        r.f(1).unwrap();
+        assert_eq!(r.byte_pos(), 2);
+    }
+}
