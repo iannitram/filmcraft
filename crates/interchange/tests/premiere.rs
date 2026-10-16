@@ -131,7 +131,8 @@ fn premiere_track_item_without_a_start_begins_at_zero() {
     let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
     assert!(!report.has_warnings(), "{report}");
     let (with_start, _) = premiere::import_project(whole.as_bytes(), &ImportOptions::default()).unwrap();
-    for (a, b) in [(&imported, &with_start)] {
+    {
+        let (a, b) = (&imported, &with_start);
         let (sa, sb) = (a.project.sequence(a.sequences[0]).unwrap(), b.project.sequence(b.sequences[0]).unwrap());
         let (va, vb) = (&sa.video_tracks[0].items[0], &sb.video_tracks[0].items[0]);
         assert_eq!((va.start, va.duration, va.source_in), (Tick::ZERO, Tick(2 * TPS), vb.source_in));
