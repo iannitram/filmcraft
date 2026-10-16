@@ -1012,6 +1012,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-log"
+version = "0.1.0"
+dependencies = [
+ "craft-stage",
+ "log",
+]
+
+[[package]]
+name = "craft-stage"
+version = "0.1.0"
+
+[[package]]
 name = "craft-ui"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=5c874d51eeb3de70e735c8ce87a59a7dedd47675#5c874d51eeb3de70e735c8ce87a59a7dedd47675"
@@ -1679,6 +1691,7 @@ dependencies = [
  "arboard",
  "chrono",
  "cpal",
+ "craft-log",
  "eframe",
  "egui",
  "filmcraft-engine",
@@ -1804,6 +1817,7 @@ version = "0.8.0"
 name = "filmcraft-cli"
 version = "0.8.0"
 dependencies = [
+ "craft-log",
  "filmcraft-automation",
  "filmcraft-codecs",
  "filmcraft-engine",
@@ -1820,6 +1834,7 @@ dependencies = [
  "filmcraft-time",
  "serde_json",
  "tokio",
+ "wgpu",
 ]
 
 [[package]]
@@ -2176,6 +2191,7 @@ dependencies = [
 name = "filmcraft-platform"
 version = "0.8.0"
 dependencies = [
+ "craft-log",
  "filmcraft-bitstream",
  "filmcraft-codecs",
  "filmcraft-color",

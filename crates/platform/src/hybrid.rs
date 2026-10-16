@@ -135,7 +135,14 @@ impl HybridDecoder {
     /// call's, while the pictures replayed before it are kept for the next output.
     fn fall_back(&mut self, err: CodecError) -> Result<Vec<DecodedFrame>> {
         let Some(mut hw) = self.hw.take() else { return Err(err) };
-        log::warn!("{} failed ({err}); continuing with the software decoder", hw.name());
+        // ours (self-logging): one searchable "decision:" line with the reason and the numbers
+        log::warn!(
+            "decision: decode: {} failed ({err}); continuing with the software decoder [codec={} samples_since_restart_point={} bytes={}]",
+            hw.name(),
+            self.entry.codec.name(),
+            self.log.as_ref().map_or(0, Vec::len),
+            self.log_bytes
+        );
         filmcraft_codecs::hw::note_hw_fallback();
         for f in hw.flush() {
             if !self.emitted.contains(&f.pts) {
