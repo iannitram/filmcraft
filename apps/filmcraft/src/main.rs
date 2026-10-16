@@ -35,6 +35,7 @@ mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod self_logging; // ours
 mod window_fit; // ours
 mod window_raise;
 
@@ -79,7 +80,7 @@ fn tell(text: &str, error: bool) {
 
 fn main() -> eframe::Result {
     // First, so the panic hook and every start-up record are logged (`logging`).
-    let logger = logging::install();
+    let logger = self_logging::install(); // ours: upstream's logging::install, wrapped
     // lossy, so a value that is not Unicode is reported like any other bad port instead of ignored
     let env_port = std::env::var_os("FILMCRAFT_CONTROL_PORT").map(|p| p.to_string_lossy().into_owned());
     let launch = match args::parse(env_port, std::env::args_os().skip(1)) {
@@ -112,6 +113,9 @@ fn main() -> eframe::Result {
             }
         }
     }
+    if let Some(d) = &log_dir {
+        self_logging::log_dir(d); // ours
+    }
     app_nap::disable();
     #[cfg(target_os = "linux")]
     dev_icon::ensure_dev_desktop_entry();
@@ -126,6 +130,7 @@ fn main() -> eframe::Result {
     // see graphics.rs.
     let backend_override = eframe::wgpu::Backends::from_env();
     let mut graphics = graphics::GraphicsStart::begin(data_root.as_deref(), backend_override.is_some(), launch.graphics);
+    self_logging::start_report(data_root.as_deref(), &graphics); // ours
     // The GPU export renderer creates its own wgpu instance with every backend; after a start
     // fell back, that would load the driver that failed. Exports then composite on the CPU.
     if graphics.mode() == graphics::Mode::Default {
@@ -162,6 +167,7 @@ fn main() -> eframe::Result {
         filmcraft_ui_egui::crash::record(&msg);
         let _ = rfd::MessageDialog::new().set_title("FilmCraft").set_description(&msg).set_level(rfd::MessageLevel::Error).show();
     }
+    self_logging::ended(&started); // ours
     started
 }
 
@@ -260,6 +266,7 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
         {
             app.set_wgpu(rs);
         }
+        self_logging::window_ready(cc, app.gpu.is_some()); // ours
         // Keep device selection available even when the default device is unavailable.
         // Settings ▸ Audio Hardware is applied on the first frame (`apply_prefs`).
         app.audio = Some(Box::new(audio::CpalOut::new()));

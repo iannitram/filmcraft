@@ -315,7 +315,8 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                 imported_track.muted = self.graph.boolean(track, &["ClipTrack", "Track", "IsMuted"], false)?;
                 imported_track.enabled = !imported_track.muted;
                 for item in self.graph.references(track, &["ClipTrack", "ClipItems", "TrackItems"])? {
-                    let start = self.graph.required_integer(item, &["ClipTrackItem", "TrackItem", "Start"])?;
+                    // a value at its default is not written: an item at the very start of its track has no Start
+                    let start = self.graph.integer(item, &["ClipTrackItem", "TrackItem", "Start"], 0)?;
                     let end = self.graph.required_integer(item, &["ClipTrackItem", "TrackItem", "End"])?;
                     let duration = end.checked_sub(start).filter(|d| start >= 0 && *d > 0).ok_or_else(|| error(PROJECT, "invalid clip timeline range"))?;
                     if end > super::MAX_TIME_TICKS {
@@ -574,7 +575,8 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                 )),
             }
         }
-        let start = self.graph.required_integer(node, &["TransitionTrackItem", "TrackItem", "Start"])?;
+        // as for a clip: a transition at the very start of its track has no Start
+        let start = self.graph.integer(node, &["TransitionTrackItem", "TrackItem", "Start"], 0)?;
         let end = self.graph.required_integer(node, &["TransitionTrackItem", "TrackItem", "End"])?;
         let duration = end.checked_sub(start).filter(|d| start >= 0 && *d > 0).ok_or_else(|| error(PROJECT, "invalid transition range"))?;
         if end > super::MAX_TIME_TICKS {
@@ -632,7 +634,7 @@ fn solid(code: &str, prefs: Option<&str>) -> Option<Generator> {
 fn custom_fade(shape_type: Option<&str>, shape_value: Option<&str>) -> &'static str {
     let number = |text: Option<&str>| text.and_then(|t| t.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
     match (number(shape_type), number(shape_value)) {
-        (Some(kind), Some(value)) if kind == 0.0 => {
+        (Some(0.0), Some(value)) => {
             if value < -17.5 {
                 "exponential_fade"
             } else {
@@ -675,7 +677,7 @@ fn pixel_aspect(text: &str) -> Option<(u32, u32)> {
 /// below zero and reaches into the media, so that trimming them leaves a clip that plays from the
 /// media's first frame. `duration` is the clip's length on the timeline (positive).
 fn empty_head(duration: i64, source_in: i64, source_out: i64, still: bool) -> Option<i64> {
-    if source_in >= 0 || source_in < -super::MAX_TIME_TICKS || source_out <= 0 {
+    if !(-super::MAX_TIME_TICKS..0).contains(&source_in) || source_out <= 0 {
         return None;
     }
     // the clip's speed is its source span over its timeline length; a still has none

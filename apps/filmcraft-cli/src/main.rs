@@ -32,6 +32,7 @@ macro_rules! out {
 
 mod args;
 mod probe;
+mod self_logging; // ours
 
 use args::{Args, parse_value};
 use filmcraft_automation::BridgeClient;
@@ -96,6 +97,7 @@ SUBCOMMANDS
                                 --image-sequence <media> is the first numbered still of a sequence
   bench-decode <media> [--frames N]
   mcp                           MCP server on stdio (headless, or --bridge to the live app)
+  diagnostics [--json]          this system, build, graphics, video, folders and where the logs are
   help                          this text
   --version                     print the version
 
@@ -139,11 +141,13 @@ fn diag(msg: std::fmt::Arguments) {
 
 fn usage(msg: impl std::fmt::Display) -> ! {
     diag(format_args!("filmcraft-cli: {msg}\nRun `filmcraft-cli help` for usage."));
+    self_logging::failed(&msg); // ours
     std::process::exit(2)
 }
 
 fn fail(msg: impl std::fmt::Display) -> ! {
     diag(format_args!("filmcraft-cli: {msg}"));
+    self_logging::failed(&msg); // ours
     std::process::exit(1)
 }
 
@@ -273,6 +277,7 @@ fn absolute(path: &str) -> String {
 async fn main() {
     cli().await;
     if STDOUT_ERROR.load(Ordering::Relaxed) {
+        self_logging::failed(&"standard output could not be written"); // ours
         std::process::exit(1);
     }
 }
@@ -295,6 +300,7 @@ async fn cli() {
     // switch. It also leaves the OS media APIs unregistered: no hardware encoder is offered and no
     // encoder probe session is opened, so a run with it never touches the video hardware to decode
     // or encode (shared machines, comparing against the software decoders).
+    self_logging::install(a.opt("--data-dir"), a.pos(0)); // ours
     if a.flag("--no-hardware") || env_switch_on(std::env::var_os("FILMCRAFT_NO_HARDWARE").as_deref()) {
         filmcraft_codecs::hw::set_hardware_decoding(false);
     } else {
@@ -305,6 +311,7 @@ async fn cli() {
     match cmd {
         "help" | "-h" => out!("{HELP}"),
         "version" => outln!("filmcraft-cli {}", env!("CARGO_PKG_VERSION")),
+        "diagnostics" => out!("{}", self_logging::diagnostics(a.opt("--data-dir"), a.flag("--json"))), // ours
         "probe" => {
             let path = a.pos(1).unwrap_or_else(|| usage("probe <media> [--image-sequence]"));
             match probe::probe(path, a.flag("--image-sequence")) {
@@ -384,6 +391,7 @@ async fn cli() {
                         outln!("{}", json!({"line": n + 1, "id": id, "ok": false, "error": e}));
                         failed += 1;
                         if !a.flag("--keep-going") {
+                            self_logging::failed(&format!("batch line {}: {e}", n + 1)); // ours
                             std::process::exit(1);
                         }
                     }
@@ -391,6 +399,7 @@ async fn cli() {
             }
             b.finish(&a).await;
             if failed > 0 {
+                self_logging::failed(&format!("{failed} batch lines failed")); // ours
                 std::process::exit(1);
             }
         }
