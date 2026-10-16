@@ -632,7 +632,7 @@ fn solid(code: &str, prefs: Option<&str>) -> Option<Generator> {
 fn custom_fade(shape_type: Option<&str>, shape_value: Option<&str>) -> &'static str {
     let number = |text: Option<&str>| text.and_then(|t| t.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
     match (number(shape_type), number(shape_value)) {
-        (Some(kind), Some(value)) if kind == 0.0 => {
+        (Some(0.0), Some(value)) => {
             if value < -17.5 {
                 "exponential_fade"
             } else {
@@ -675,7 +675,7 @@ fn pixel_aspect(text: &str) -> Option<(u32, u32)> {
 /// below zero and reaches into the media, so that trimming them leaves a clip that plays from the
 /// media's first frame. `duration` is the clip's length on the timeline (positive).
 fn empty_head(duration: i64, source_in: i64, source_out: i64, still: bool) -> Option<i64> {
-    if source_in >= 0 || source_in < -super::MAX_TIME_TICKS || source_out <= 0 {
+    if !(-super::MAX_TIME_TICKS..0).contains(&source_in) || source_out <= 0 {
         return None;
     }
     // the clip's speed is its source span over its timeline length; a still has none
