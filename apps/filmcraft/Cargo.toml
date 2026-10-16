@@ -18,6 +18,7 @@ whisper = ["filmcraft-engine/whisper", "filmcraft-engine/speech-download"]
 neural-voices = ["filmcraft-engine/neural-voices"]
 
 [dependencies]
+craft-log = { path = "../../crates/craft-log" } # ours (self-logging)
 filmcraft-engine = { workspace = true }
 filmcraft-export = { workspace = true }
 filmcraft-project = { workspace = true }
