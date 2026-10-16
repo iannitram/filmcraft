@@ -29,6 +29,7 @@ use serde_json::Value;
 /// (crate name without the `filmcraft-` prefix, layer).
 const LAYERS: &[(&str, u8)] = &[
     ("testkit", 0),
+    ("craft-stage", 0), // ours (self-logging), not upstream
     ("time", 0),
     ("geom", 0),
     ("color", 0),
@@ -82,6 +83,7 @@ const LAYERS: &[(&str, u8)] = &[
     ("format", 3),
     ("engine", 4),
     ("platform", 5),
+    ("craft-log", 5), // ours (self-logging), not upstream
     ("ui-egui", 5),
     ("automation", 5),
     ("filmcraft", 6),

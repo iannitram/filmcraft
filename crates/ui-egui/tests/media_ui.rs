@@ -416,6 +416,93 @@ fn link_media_dialog_relinks_moved_media() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// `<root>/p.fcproj` with a sequence of two one-second episode files under old names,
+/// `<root>/Media/Harbour - 1x02 - Sunset.mov` and `<root>/Media/Night - 1x03 - City.mov`. Both are
+/// then gone: the first is renamed to `<root>/Masters/Season 1/Harbour the Series - s01e02 -
+/// Sunset.mov`, where a three-second cut of the same episode number lies beside it.
+fn renamed_episode_project(root: &Path) -> String {
+    let media = root.join("Media");
+    std::fs::create_dir_all(&media).unwrap();
+    let files = [media.join("Harbour - 1x02 - Sunset.mov"), media.join("Night - 1x03 - City.mov")];
+    make_movie(&files[0], DemoScene::OceanSunset, 320, 180, 24);
+    make_movie(&files[1], DemoScene::CityNight, 320, 180, 24);
+    let mut s = Session::default();
+    let r = s.execute("file.import", json!({"paths": files.iter().map(|f| f.to_string_lossy()).collect::<Vec<_>>()})).unwrap();
+    let items: Vec<u64> = r["items"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
+    let rate = FrameRate::FPS_24;
+    let mut p = (*s.project).clone();
+    let seq = p.new_sequence("Episodes", SequenceSettings { width: 320, height: 180, frame_rate: rate, ..Default::default() }, 1, 1, None);
+    let mut at = Tick::ZERO;
+    for it in items {
+        let d = rate.tick_of(24);
+        let v = p.make_track_item(filmcraft_engine::project::ItemId(it), TrackKind::Video, at, TimeRange::new(Tick::ZERO, d), rate).unwrap();
+        p.sequence_mut(seq).unwrap().video_tracks[0].items.push(v);
+        at += d;
+    }
+    s.project = Arc::new(p);
+    let path = root.join("p.fcproj").to_string_lossy().into_owned();
+    s.execute("file.save", json!({"path": path})).unwrap();
+    drop(s); // Close decoder files before renaming them on Windows.
+    let masters = root.join("Masters").join("Season 1");
+    std::fs::create_dir_all(&masters).unwrap();
+    std::fs::rename(&files[0], masters.join("Harbour the Series - s01e02 - Sunset.mov")).unwrap();
+    make_movie(&masters.join("Harbour the Series - S01E02 - Sunset (long).mov"), DemoScene::OceanSunset, 320, 180, 72);
+    std::fs::remove_file(&files[1]).unwrap();
+    path
+}
+
+/// The same episode under another name is listed with both lengths and is linked only by its own
+/// "Link this one"; a longer cut of it is listed without a button; no other row follows the link.
+#[test]
+fn link_media_lists_a_renamed_episode_and_links_it_only_on_a_click() {
+    let root = tmp_dir("suggest");
+    let path = renamed_episode_project(&root);
+    let mut s = Session::default();
+    s.execute("file.open", json!({"path": path})).unwrap();
+    let mut d = Driver::new(s);
+    d.frames(6);
+    assert_eq!(d.ids("linkMedia.row.").len(), 2);
+    assert!(d.ids("linkMedia.suggestion.").is_empty() && d.ids("linkMedia.otherCut.").is_empty(), "nothing is suggested before it is asked for");
+    let missing_now = |d: &mut Driver| -> usize {
+        let st = d.exec("media.status", json!({}));
+        st.as_array().unwrap().iter().filter(|m| m["status"] != "online").count()
+    };
+    assert_eq!(missing_now(&mut d), 2);
+
+    d.app().ui.link_media.as_mut().unwrap().folder = root.join("Masters").to_string_lossy().into_owned();
+    d.click("linkMedia.suggest");
+    let mut ids = d.ids("linkMedia.suggestion.");
+    ids.sort();
+    assert_eq!(ids, ["linkMedia.suggestion.0", "linkMedia.suggestion.0.link"], "one file is offered, with one button");
+    assert_eq!(d.ids("linkMedia.otherCut."), ["linkMedia.otherCut.0"], "the longer cut is listed");
+    let label = |d: &mut Driver, id: &str| -> String {
+        let v = d.ok("ui.elements", json!({"prefix": id}));
+        v.as_array().unwrap().iter().find(|e| e["id"] == id).and_then(|e| e["label"].as_str()).unwrap_or_default().to_string()
+    };
+    let offered = label(&mut d, "linkMedia.suggestion.0");
+    assert!(offered.contains("Harbour the Series - s01e02 - Sunset.mov"), "{offered}");
+    assert!(offered.contains("this file 0:01.00") && offered.contains("recorded 0:01.00") && offered.contains("the same length"), "both lengths: {offered}");
+    let other = label(&mut d, "linkMedia.otherCut.0");
+    assert!(other.contains("Sunset (long).mov") && other.contains("this file 0:03.00") && other.contains("2.0 s longer"), "{other}");
+    assert_eq!(missing_now(&mut d), 2, "a suggestion links nothing");
+    d.snapshot("media-link-suggestions");
+
+    d.click("linkMedia.suggestion.0.link");
+    d.frames(4);
+    assert_eq!(missing_now(&mut d), 1, "the click links that one file and no other row follows it");
+    let st = d.exec("media.status", json!({}));
+    let linked: Vec<&Value> = st.as_array().unwrap().iter().filter(|m| m["status"] == "online").collect();
+    assert!(linked.len() == 1 && linked[0]["path"].as_str().is_some_and(|p| p.ends_with("Harbour the Series - s01e02 - Sunset.mov")), "{st}");
+    assert_eq!(d.ids("linkMedia.row.").len(), 1, "the dialog stays open on the file that is still missing");
+    assert!(d.ids("linkMedia.suggestion.").is_empty() && d.ids("linkMedia.otherCut.").is_empty(), "the list is emptied by the link");
+
+    // the file that is left has no episode of its number in the folder
+    d.click("linkMedia.suggest");
+    assert!(d.ids("linkMedia.suggestion.").is_empty() && d.ids("linkMedia.otherCut.").is_empty());
+    assert!(!d.app().ui.link_media.as_ref().unwrap().message.is_empty(), "and the dialog says so");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn offline_badges_proxy_toggle_and_dialogs() {
     let root = tmp_dir("badges");

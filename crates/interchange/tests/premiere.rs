@@ -120,6 +120,33 @@ fn premiere_native_project_keeps_cuts_links_bins_and_motion() {
     assert!(export(&imported.project, id, Format::PremiereProject, &ExportOptions::default()).is_err());
 }
 
+/// A newer project file leaves a value at its default out: a clip at the very start of its track
+/// has an End and no Start. It starts at zero; the project must not be refused for it. An item
+/// with no End is still refused.
+#[test]
+fn premiere_track_item_without_a_start_begins_at_zero() {
+    let whole = project_xml();
+    assert_eq!(whole.matches("<Start>0</Start>").count(), 2, "the fixture's video and audio clip both start at zero");
+    let xml = whole.replace("<Start>0</Start>", "");
+    let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+    assert!(!report.has_warnings(), "{report}");
+    let (with_start, _) = premiere::import_project(whole.as_bytes(), &ImportOptions::default()).unwrap();
+    {
+        let (a, b) = (&imported, &with_start);
+        let (sa, sb) = (a.project.sequence(a.sequences[0]).unwrap(), b.project.sequence(b.sequences[0]).unwrap());
+        let (va, vb) = (&sa.video_tracks[0].items[0], &sb.video_tracks[0].items[0]);
+        assert_eq!((va.start, va.duration, va.source_in), (Tick::ZERO, Tick(2 * TPS), vb.source_in));
+        assert_eq!((va.start, va.duration), (vb.start, vb.duration), "the same clip as with the zero written out");
+        let (aa, ab) = (&sa.audio_tracks[0].items[0], &sb.audio_tracks[0].items[0]);
+        assert_eq!((aa.start, aa.duration), (ab.start, ab.duration));
+        assert_eq!(aa.start, Tick::ZERO);
+    }
+    let no_end = whole.replacen(&format!("<End>{}</End>", 2 * TPS), "", 1);
+    assert_ne!(no_end, whole, "the fixture's first clip ends at two seconds");
+    let refused = premiere::import_project(no_end.as_bytes(), &ImportOptions::default()).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(refused.contains("missing ClipTrackItem/TrackItem/End"), "{refused}");
+}
+
 #[test]
 fn premiere_gzip_and_utf16_decode_the_same_project() {
     let xml = project_xml();
@@ -811,6 +838,28 @@ const TITLE_JSON: &str = r#"{"mTextParam":{"mAlignment":1,"mLeading":0,"mLigatur
   "mStrokeVisible":{"mParamValues":[[0,true]]},"mStrokeWidth":{"mParamValues":[[0,4]]},"mStrokeColor":{"mParamValues":[[0,0]]},
   "mTracking":{"mParamValues":[[0,20]]},"mFauxBold":{"mParamValues":[[0,true]]},"mCapsOption":{"mParamValues":[[0,1]]}}},"mVersion":1}"#;
 
+/// Source Text numbers the alignments left 0, right 1, centre 2; FilmCraft's choices run Left,
+/// Center, Right. A right-aligned title must not come in centred on its right end (half of it
+/// past the edge of the frame), nor a centred one right-aligned on the middle.
+#[test]
+fn premiere_text_alignment_numbers_are_left_right_centre() {
+    use filmcraft_project::ParamValue;
+    for (written, expected, name) in [(0, 0u32, "Left"), (1, 2, "Right"), (2, 1, "Center")] {
+        let json = TITLE_JSON.replace("\"mAlignment\":1", &format!("\"mAlignment\":{written}"));
+        assert!(json.contains(&format!("\"mAlignment\":{written}")));
+        let xml = project_with_text_layer(&source_text_json(&json));
+        let (imported, _) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+        let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+        let layer = video.graphic_layers().next().unwrap();
+        let got = match &layer.param("align").unwrap().value {
+            ParamValue::Choice(v) => *v,
+            other => panic!("align: {other:?}"),
+        };
+        assert_eq!(got, expected, "alignment {written} in the file is {name}");
+        assert_eq!(filmcraft_project::graphic::ALIGN_OPTS[got as usize], name);
+    }
+}
+
 /// A title typed in the application is a graphic clip with a text layer here: the words, the
 /// font, the size, the colours and the layer's place come across, the clip is switched on and
 /// starts at its canvas's own start.
@@ -845,7 +894,7 @@ fn premiere_text_of_a_graphic_becomes_a_text_layer() {
     assert_eq!((text("text").as_str(), text("font").as_str(), text("font_style").as_str()), ("A synthetic title", "Example Sans", "Bold"));
     assert_eq!(layer.f64_at("size", Tick::ZERO), 77.5);
     assert_eq!(layer.f64_at("tracking", Tick::ZERO), 20.0);
-    assert!(matches!(layer.param("align").unwrap().value, ParamValue::Choice(1)), "centred");
+    assert!(matches!(layer.param("align").unwrap().value, ParamValue::Choice(2)), "the file's 1 is right-aligned");
     assert!(matches!(layer.param("caps").unwrap().value, ParamValue::Choice(1)), "all caps");
     assert!(matches!(layer.param("faux_bold").unwrap().value, ParamValue::Bool(true)));
     assert!(matches!(layer.param("fill_color").unwrap().value, ParamValue::Color(c) if c == [1.0, 0.0, 0.0, 1.0]), "{:?}", layer.param("fill_color"));
@@ -1116,7 +1165,7 @@ fn premiere_text_in_the_binary_form_becomes_a_text_layer() {
     };
     assert_eq!((text("text").as_str(), text("font").as_str(), text("font_style").as_str()), ("Two fonts", "Example Serif", "Bold"));
     assert_eq!(layer.f64_at("size", Tick::ZERO), 70.0);
-    assert!(matches!(layer.param("align").unwrap().value, ParamValue::Choice(1)));
+    assert!(matches!(layer.param("align").unwrap().value, ParamValue::Choice(2)), "the file's 1 is right-aligned");
     // a colour channel that is not written is 255
     assert!(
         matches!(layer.param("fill_color").unwrap().value, ParamValue::Color(c) if c == [236.0 / 255.0, 246.0 / 255.0, 1.0, 1.0]),
