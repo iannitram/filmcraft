@@ -9,6 +9,7 @@
 
 use std::fmt;
 
+/// Errors that can occur when reading or writing bitstreams.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BitError {
     /// Tried to read past the end of the buffer.
@@ -27,6 +28,7 @@ impl fmt::Display for BitError {
 }
 impl std::error::Error for BitError {}
 
+/// A result with [`BitError`] as the error type.
 pub type Result<T> = std::result::Result<T, BitError>;
 
 /// MSB-first bit reader over a byte slice.
@@ -38,9 +40,11 @@ pub struct BitReader<'a> {
 }
 
 impl<'a> BitReader<'a> {
+    /// Create a reader over the given byte slice.
     pub fn new(data: &'a [u8]) -> Self {
         Self { data, pos: 0 }
     }
+    /// The byte slice this reader is reading from.
     pub fn data(&self) -> &'a [u8] {
         self.data
     }
@@ -48,12 +52,15 @@ impl<'a> BitReader<'a> {
     pub fn position(&self) -> usize {
         self.pos
     }
+    /// Number of bits remaining in the buffer from the current position.
     pub fn bits_left(&self) -> usize {
         (self.data.len() * 8).saturating_sub(self.pos)
     }
+    /// Whether the current bit position is a multiple of 8.
     pub fn is_byte_aligned(&self) -> bool {
         self.pos.is_multiple_of(8)
     }
+    /// Advance the bit position to the next byte boundary (rounded up).
     pub fn byte_align(&mut self) {
         self.pos = self.pos.div_ceil(8) * 8;
     }
@@ -61,6 +68,7 @@ impl<'a> BitReader<'a> {
     pub fn byte_pos(&self) -> usize {
         self.pos / 8
     }
+    /// Seek to the given bit position without bounds checking.
     pub fn seek_bits(&mut self, pos: usize) {
         self.pos = pos;
     }
@@ -82,6 +90,7 @@ impl<'a> BitReader<'a> {
         ((v << (24 + shift)) >> (64 - n)) as u32
     }
 
+    /// Read `n` MSB-first bits, returning an error if fewer than `n` bits remain.
     #[inline]
     pub fn read_bits(&mut self, n: u32) -> Result<u32> {
         if n as usize > self.bits_left() {
@@ -92,6 +101,7 @@ impl<'a> BitReader<'a> {
         Ok(v)
     }
 
+    /// Read `n` MSB-first bits as a `u64`, returning an error if fewer than `n` bits remain.
     pub fn read_bits_u64(&mut self, n: u32) -> Result<u64> {
         if n <= 32 {
             return self.read_bits(n).map(u64::from);
@@ -101,14 +111,17 @@ impl<'a> BitReader<'a> {
         Ok((hi << 32) | lo)
     }
 
+    /// Read a single MSB-first bit, returning an error if none remain.
     #[inline]
     pub fn read_bit(&mut self) -> Result<bool> {
         self.read_bits(1).map(|b| b == 1)
     }
+    /// Read a single MSB-first bit flag, returning an error if none remain.
     pub fn read_flag(&mut self) -> Result<bool> {
         self.read_bit()
     }
 
+    /// Skip `n` bits, returning an error if fewer than `n` bits remain.
     pub fn skip(&mut self, n: usize) -> Result<()> {
         if n > self.bits_left() {
             return Err(BitError::Eof);
@@ -181,9 +194,11 @@ pub struct BitWriter {
 }
 
 impl BitWriter {
+    /// Create a new, empty bit writer.
     pub fn new() -> Self {
         Self::default()
     }
+    /// Write the low `n` bits of `value` MSB-first.
     pub fn write_bits(&mut self, value: u32, n: u32) {
         debug_assert!(n <= 32);
         if n == 0 {
@@ -198,9 +213,11 @@ impl BitWriter {
         }
         self.acc &= (1u64 << self.nbits) - 1;
     }
+    /// Write a single MSB-first bit.
     pub fn write_bit(&mut self, b: bool) {
         self.write_bits(b as u32, 1);
     }
+    /// Write an unsigned Exp-Golomb code `ue(v)`.
     pub fn write_ue(&mut self, v: u32) {
         self.write_code_num(u64::from(v));
     }
@@ -219,13 +236,16 @@ impl BitWriter {
             self.write_bits(x as u32, len);
         }
     }
+    /// Write a signed Exp-Golomb code `se(v)`.
     pub fn write_se(&mut self, v: i32) {
         let m = u64::from(v.unsigned_abs()) * 2;
         self.write_code_num(if v > 0 { m - 1 } else { m });
     }
+    /// Total bit length of the written data (bytes plus partial byte).
     pub fn bit_len(&self) -> usize {
         self.buf.len() * 8 + self.nbits as usize
     }
+    /// Whether the written data ends on a byte boundary.
     pub fn is_byte_aligned(&self) -> bool {
         self.nbits == 0
     }
@@ -240,6 +260,7 @@ impl BitWriter {
         self.write_bit(true);
         self.align_zero();
     }
+    /// Write each byte MSB-first, respecting any pending partial byte.
     pub fn write_bytes(&mut self, bytes: &[u8]) {
         if self.nbits == 0 {
             self.buf.extend_from_slice(bytes);
@@ -249,10 +270,12 @@ impl BitWriter {
             }
         }
     }
+    /// Finalize the writer, padding the last byte with zeros, and return the bytes.
     pub fn finish(mut self) -> Vec<u8> {
         self.align_zero();
         self.buf
     }
+    /// The bytes written so far (excluding any partial byte in the accumulator).
     pub fn bytes(&self) -> &[u8] {
         &self.buf
     }
