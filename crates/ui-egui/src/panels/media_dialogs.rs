@@ -7,7 +7,9 @@
 //! - Link Media: `linkMedia.row.<n>`, `linkMedia.match.<fileName|extension|clipId|duration|mediaStart|metadata>`,
 //!   `linkMedia.alignTimecode`, `linkMedia.relinkOthers`, `linkMedia.folder`, `linkMedia.browse`,
 //!   `linkMedia.exactName`, `linkMedia.search`, `linkMedia.candidate.<n>`, `linkMedia.preview`,
-//!   `linkMedia.link`, `linkMedia.locate`, `linkMedia.offline`, `linkMedia.offlineAll`, `linkMedia.cancel`.
+//!   `linkMedia.link`, `linkMedia.locate`, `linkMedia.offline`, `linkMedia.offlineAll`, `linkMedia.cancel`;
+//!   the same episode under another name: `linkMedia.suggest`, `linkMedia.suggestion.<n>` (its two
+//!   lengths), `linkMedia.suggestion.<n>.link` ("Link this one"), `linkMedia.otherCut.<n>` (listed only).
 //! - Make Offline: `makeOffline.keep`, `makeOffline.delete`, `makeOffline.ok`, `makeOffline.cancel`.
 //! - Create Proxies: `proxies.preset.<id>`, `proxies.destination`, `proxies.browse`, `proxies.ok`, `proxies.cancel`.
 //! - Project Manager: `pm.seq.<id>`, `pm.mode.<collect|consolidate>`, `pm.preset.<id>`, `pm.excludeUnused`,
@@ -18,7 +20,7 @@ use egui::{Color32, RichText};
 use serde_json::{Value, json};
 
 use crate::native_dialogs::FileDialog;
-use crate::state::{LinkMediaDraft, ProjectManagerDraft, ProxyDraft};
+use crate::state::{LinkMediaDraft, LinkSuggestion, ProjectManagerDraft, ProxyDraft};
 use crate::{FilmcraftApp, RelinkHint};
 
 type Elems = Vec<(String, egui::Rect, String)>;
@@ -155,6 +157,7 @@ fn link_media(app: &mut FilmcraftApp, ctx: &egui::Context) {
     let mut elems: Elems = Vec::new();
     let mut keep = true;
     let mut action: Option<&str> = None;
+    let mut link_suggestion: Option<LinkSuggestion> = None;
     let accent = app.tokens.accent;
     let sel_path = d.candidate.and_then(|c| d.candidates.get(c)).map(|c| c.0.clone());
     let preview = sel_path.as_deref().and_then(|p| preview_texture(app, ctx, p));
@@ -185,6 +188,7 @@ fn link_media(app: &mut FilmcraftApp, ctx: &egui::Context) {
                                 d.row = k;
                                 d.candidates.clear();
                                 d.candidate = None;
+                                d.suggestions.clear();
                             }
                             ui.label(fname);
                             ui.label(RichText::new(path).small());
@@ -273,6 +277,40 @@ fn link_media(app: &mut FilmcraftApp, ctx: &egui::Context) {
                     }
                     elems.push(("linkMedia.preview".into(), rect, "preview".into()));
                 });
+                // The same episode under another name (a renamed, re-encoded episode file). Ours, not
+                // upstream's, so its words are not in the translation catalogs yet.
+                ui.horizontal_wrapped(|ui| {
+                    let r = ui.button("Suggest by episode number");
+                    push(&mut elems, "linkMedia.suggest", &r, "Suggest by episode number");
+                    if r.clicked() {
+                        action = Some("suggest");
+                    }
+                    ui.label(RichText::new("Looks in the folder above for the same episode under another name. Nothing is linked until you choose.").weak());
+                });
+                if !d.suggestions.is_empty() {
+                    egui::ScrollArea::vertical().id_salt("link-media-suggestions-scroll").max_height(96.0).auto_shrink([false, true]).show(ui, |ui| {
+                        let (mut same, mut other) = (0usize, 0usize);
+                        for s in &d.suggestions {
+                            let text = suggestion_text(s);
+                            ui.horizontal(|ui| {
+                                if s.other_cut {
+                                    let r = ui.label(RichText::new(&text).color(Color32::from_rgb(0xe0, 0x8a, 0x6a)));
+                                    push(&mut elems, format!("linkMedia.otherCut.{other}"), &r, text.clone());
+                                    other += 1;
+                                } else {
+                                    let r = ui.button("Link this one");
+                                    push(&mut elems, format!("linkMedia.suggestion.{same}.link"), &r, "Link this one");
+                                    if r.clicked() {
+                                        link_suggestion = Some(s.clone());
+                                    }
+                                    let r = ui.label(&text);
+                                    push(&mut elems, format!("linkMedia.suggestion.{same}"), &r, text.clone());
+                                    same += 1;
+                                }
+                            });
+                        }
+                    });
+                }
                 if !d.message.is_empty() {
                     ui.colored_label(Color32::from_rgb(0xe0, 0x8a, 0x6a), &d.message);
                 }
@@ -350,10 +388,42 @@ fn link_media(app: &mut FilmcraftApp, ctx: &egui::Context) {
                 relink(app, &mut d, path);
             }
         }
+        Some("suggest") => match app.session.execute("media.relinkSuggest", json!({"folder": d.folder, "item": item})) {
+            Ok(v) => {
+                let row = &v["suggestions"][0];
+                let recorded_seconds = row["recordedSeconds"].as_f64().unwrap_or(0.0);
+                let read = |list: &Value, other_cut: bool| -> Vec<LinkSuggestion> {
+                    list.as_array()
+                        .map(|a| {
+                            a.iter()
+                                .map(|c| LinkSuggestion {
+                                    path: c["path"].as_str().unwrap_or_default().to_string(),
+                                    seconds: c["seconds"].as_f64().unwrap_or(0.0),
+                                    recorded_seconds,
+                                    difference_frames: c["differenceFrames"].as_i64(),
+                                    other_cut,
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                };
+                d.suggestions = read(&row["candidates"], false);
+                d.suggestions.extend(read(&row["otherCuts"], true));
+                d.message = if !d.suggestions.is_empty() {
+                    String::new()
+                } else if row.is_null() {
+                    "This file's name carries no season and episode number.".into()
+                } else {
+                    "No file of that show and episode number in the folder.".into()
+                };
+            }
+            Err(e) => d.message = e.to_string(),
+        },
         Some("offline") => {
             d.skipped.push(item);
             d.candidates.clear();
             d.candidate = None;
+            d.suggestions.clear();
         }
         Some("offlineAll") | Some("cancel") => {
             let _ = app.session.execute("media.offlineAll", json!({}));
@@ -361,7 +431,56 @@ fn link_media(app: &mut FilmcraftApp, ctx: &egui::Context) {
         }
         _ => {}
     }
+    // "Link this one": the click is the confirmation. This one file only, whatever its name, size
+    // and extension (they differ by design), and no other row follows it.
+    if let Some(s) = link_suggestion {
+        match app.session.execute("media.relink", json!({"item": item, "path": s.path, "force": true, "relinkOthers": false})) {
+            Ok(v) => {
+                log::info!(
+                    "link media: item {item} linked to a suggested file by a click ({} against {} recorded, {:?} frames): {}",
+                    clock(s.seconds),
+                    clock(s.recorded_seconds),
+                    s.difference_frames,
+                    s.path
+                );
+                d.message.clear();
+                d.candidates.clear();
+                d.candidate = None;
+                d.suggestions.clear();
+                app.ui.status = tlf!("Linked {n} clip(s)", n = v["relinked"].as_array().map_or(0, Vec::len));
+            }
+            Err(e) => d.message = e.to_string(),
+        }
+    }
     app.ui.link_media = keep.then_some(d);
+}
+
+/// A length as minutes and seconds to the hundredth (`42:41.05`), with hours when there are any.
+fn clock(seconds: f64) -> String {
+    let s = if seconds.is_finite() { seconds.max(0.0) } else { 0.0 };
+    let whole = s.floor();
+    let (h, m) = ((whole / 3600.0).floor(), ((whole % 3600.0) / 60.0).floor());
+    let rest = s - h * 3600.0 - m * 60.0;
+    if h >= 1.0 { format!("{h:.0}:{m:02.0}:{rest:05.2}") } else { format!("{m:.0}:{rest:05.2}") }
+}
+
+/// One suggestion as the dialog words it: the file's name, both lengths and how far apart they are.
+fn suggestion_text(s: &LinkSuggestion) -> String {
+    let name = s.path.rsplit(['/', '\\']).next().unwrap_or(&s.path);
+    let lengths = format!("this file {}, the project recorded {}", clock(s.seconds), clock(s.recorded_seconds));
+    if s.other_cut {
+        let diff = s.seconds - s.recorded_seconds;
+        return format!("Another cut, not offered: {name} ({lengths}; {:.1} s {})", diff.abs(), if diff < 0.0 { "shorter" } else { "longer" });
+    }
+    let apart = match s.difference_frames {
+        Some(0) => "the same length".to_string(),
+        Some(1) => "1 frame longer".to_string(),
+        Some(-1) => "1 frame shorter".to_string(),
+        Some(n) if n > 0 => format!("{n} frames longer"),
+        Some(n) => format!("{} frames shorter", n.unsigned_abs()),
+        None => format!("{:+.3} s", s.seconds - s.recorded_seconds),
+    };
+    format!("{name} ({lengths}; {apart})")
 }
 
 fn make_offline(app: &mut FilmcraftApp, ctx: &egui::Context) {
@@ -639,6 +758,7 @@ fn relink_to(app: &mut FilmcraftApp, d: &mut LinkMediaDraft, item: &Value, path:
             d.message.clear();
             d.candidates.clear();
             d.candidate = None;
+            d.suggestions.clear();
             app.ui.status = tlf!("Linked {n} clip(s)", n = v["relinked"].as_array().map_or(0, Vec::len));
         }
         Err(e) => d.message = e.to_string(),
