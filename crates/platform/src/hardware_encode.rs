@@ -195,6 +195,10 @@ impl HardwareEncoder {
 }
 
 impl VideoEncoder for HardwareEncoder {
+    fn encoder_name(&self) -> &'static str {
+        "VideoToolbox" // ours (self-logging)
+    }
+
     fn sample_entry(&self) -> SampleEntry {
         let c = self.vt.config();
         let (w, h) = (c.width.min(u32::from(u16::MAX)) as u16, c.height.min(u32::from(u16::MAX)) as u16);

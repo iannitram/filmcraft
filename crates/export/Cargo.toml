@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 filmcraft-time = { workspace = true }
+log = { workspace = true } # ours (self-logging)
 filmcraft-frame = { workspace = true }
 filmcraft-color = { workspace = true }
 filmcraft-media = { workspace = true }
@@ -35,5 +36,6 @@ web-time = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "tiff", "bmp"] }
 
 [dev-dependencies]
+craft-log = { path = "../craft-log" } # ours (self-logging)
 filmcraft-testkit = { workspace = true }
 filmcraft-codecs = { workspace = true }

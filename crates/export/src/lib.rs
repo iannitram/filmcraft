@@ -15,6 +15,7 @@
 
 use std::io::Write;
 
+mod encoder_decision; // ours (self-logging)
 mod aac_out;
 mod audio_out;
 mod deflate;
@@ -749,7 +750,14 @@ pub trait VideoEncoder: Send {
     fn pass_stats(&self) -> Option<filmcraft_h264enc::PassStats> {
         None
     }
+    /// ours (self-logging): who encodes, for the export's `decision:` line.
+    fn encoder_name(&self) -> &'static str {
+        BUILT_IN_ENCODER
+    }
 }
+
+/// ours (self-logging): [`VideoEncoder::encoder_name`] of the encoders built into this crate.
+pub const BUILT_IN_ENCODER: &str = "built-in (software)";
 
 /// Audio encoder (AAC) plugged in by codec crates; PCM is built in.
 pub trait AudioEncoder: Send {

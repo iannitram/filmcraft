@@ -58,7 +58,19 @@ pub fn video(r: &mut Report) {
             if enabled { "NVENC H.264 registered (acts only with NVIDIA's driver, when an export asks); no VA-API encoder" } else { "none (hardware is off)" },
         );
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    r.add(
+        "video",
+        "hardware encoding",
+        // measured 2026-10-18 on an M1: H.264 with Hardware Encoding on and every HEVC export used
+        // VideoToolbox; each export's `decision: export:` line says which encoder took it
+        match filmcraft_platform::hardware_encode::hevc_probed() {
+            true if filmcraft_platform::hardware_encode::hevc_available() => "VideoToolbox: H.264 when an export asks (Hardware Encoding on), H.265 always",
+            true => "VideoToolbox: H.264 when an export asks (Hardware Encoding on); no hardware H.265 encoder",
+            false => "VideoToolbox: H.264 when an export asks (Hardware Encoding on), H.265 always (not probed yet)",
+        },
+    );
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     r.add("video", "hardware encoding", craft_log::report::UNKNOWN);
 }
 

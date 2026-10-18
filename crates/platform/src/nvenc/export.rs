@@ -82,6 +82,10 @@ fn composition_offset(pts: i64, dts: i64, den: i64) -> i32 {
 }
 
 impl VideoEncoder for NvencEncoder {
+    fn encoder_name(&self) -> &'static str {
+        "NVENC" // ours (self-logging)
+    }
+
     fn sample_entry(&self) -> SampleEntry {
         let (sps, pps) = self.enc.parameter_sets();
         // `config` declines sizes above u16::MAX
