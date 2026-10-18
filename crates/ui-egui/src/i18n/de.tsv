@@ -391,3 +391,307 @@
 	Zoom to Sequence	Auf Sequenz zoomen
 	Project Notes	Projektnotizen
 
+# Machine translations: the rows below were drafted by a local model (Qwen, homework jobs
+# F029-F034, 2026-10-16) from the plain meaning of the English labels, then reviewed and corrected
+# by Claude on 2026-10-17 against the terms above. No native speaker has checked them yet; do not
+# send them upstream without that pass.
+	Refresh Changed Media	Geänderte Medien aktualisieren
+	Medium	Mittel
+	Recent	Zuletzt verwendet
+	Home	Start
+	Import	Importieren
+	{name} - Edited	{name} - bearbeitet
+	Full screen	Vollbild
+	Volume	Lautstärke
+	Master volume: use the Audio Track Mixer	Gesamtlautstärke: im Audiospur-Mischpult einstellen
+	Search	Suchen
+	Quick Export	Schnellexport
+	Join the ArtCraft Discord (discord.gg/artcraft)	Dem ArtCraft-Discord beitreten (discord.gg/artcraft)
+	Cancel	Abbrechen
+	OK	OK
+	Interpret Footage	Material interpretieren
+	Color Management · {n} item	Farbmanagement · {n} Element
+	Color Management · {n} items	Farbmanagement · {n} Elemente
+	Media colour space (from file metadata): {detected}	Farbraum der Medien (aus den Datei-Metadaten): {detected}
+	Override media colour space:	Farbraum der Medien überschreiben:
+	Use file metadata	Datei-Metadaten verwenden
+	Sequence Color Management	Sequenz-Farbmanagement
+	Working Color Space	Arbeitsfarbraum
+	Wide gamut color (composite in BT.2020)	Weiter Farbumfang (Komposition in BT.2020)
+	Auto tone map media (HDR and log into SDR)	Automatisches Tone-Mapping der Medien (HDR und Log nach SDR)
+	Audio Gain	Audioverstärkung
+	Set Gain to:	Verstärkung festlegen auf:
+	Adjust Gain by:	Verstärkung anpassen um:
+	Normalize Max Peak to:	Maximale Spitze normalisieren auf:
+	Normalize All Peaks to:	Alle Spitzen normalisieren auf:
+	Peak Amplitude: {peak}	Spitzenamplitude: {peak}
+	Standard	Standard
+	Adaptive	Adaptiv
+	Mono	Mono
+	Stereo	Stereo
+	Add Tracks	Spuren hinzufügen
+	Amount	Betrag
+	Placement	Platzierung
+	Track type	Spurtyp
+	Add video tracks	Videospuren hinzufügen
+	Add audio tracks	Audiospuren hinzufügen
+	Add audio submix tracks	Audio-Submix-Spuren hinzufügen
+	After {name}	Nach {name}
+	Before First Track	Vor der ersten Spur
+	Delete Tracks	Spuren löschen
+	Video Tracks	Videospuren
+	Audio Tracks	Audiospuren
+	Delete Video Tracks	Videospuren löschen
+	Delete Audio Tracks	Audiospuren löschen
+	All Empty Tracks	Alle leeren Spuren
+	Caption Tracks	Untertitelspuren
+	Delete Caption Tracks	Untertitelspuren löschen
+	Delete Caption Track	Untertitelspur löschen
+	Delete Empty Caption Tracks	Leere Untertitelspuren löschen
+	Version {version}	Version {version}
+	A clean-room, pure-Rust non-linear video editor. Part of the ArtCraft family.	Ein nichtlinearer Videoeditor, als Clean-Room-Entwicklung komplett in Rust geschrieben. Teil der ArtCraft-Familie.
+	Join the ArtCraft Discord	Dem ArtCraft-Discord beitreten
+	Source code on GitHub	Quellcode auf GitHub
+	Report an issue	Problem melden
+	MIT OR Apache-2.0. Fonts: Inter, Noto Serif and JetBrains Mono (SIL OFL 1.1).	MIT OR Apache-2.0. Schriften: Inter, Noto Serif und JetBrains Mono (SIL OFL 1.1).
+	just now	gerade eben
+	{n} s ago	vor {n} s
+	{n} min ago	vor {n} min
+	{n} h ago	vor {n} h
+	All Events	Alle Ereignisse
+	Warnings and Errors	Warnungen und Fehler
+	Errors Only	Nur Fehler
+	Clear All	Alles löschen
+	No events.	Keine Ereignisse.
+	Show finished jobs	Abgeschlossene Aufträge anzeigen
+	Cancelled	Abgebrochen
+	Failed: {e}	Fehlgeschlagen: {e}
+	Done	Fertig
+	No background jobs.	Keine Hintergrundaufträge.
+	Recover Unsaved Changes	Ungespeicherte Änderungen wiederherstellen
+	Untitled	Ohne Titel
+	FilmCraft was closed while “{name}” had unsaved changes.	FilmCraft wurde geschlossen, während „{name}“ ungespeicherte Änderungen hatte.
+	FilmCraft quit unexpectedly while “{name}” had unsaved changes.	FilmCraft wurde unerwartet beendet, während „{name}“ ungespeicherte Änderungen hatte.
+	Recover unsaved changes from {when}?	Ungespeicherte Änderungen von {when} wiederherstellen?
+	The project had not been saved yet.	Das Projekt wurde noch nicht gespeichert.
+	{n} sessions have unsaved changes:	{n} Sitzungen haben ungespeicherte Änderungen:
+	Discard	Verwerfen
+	Recover	Wiederherstellen
+	Not Now	Jetzt nicht
+	Are you sure you want to discard your changes to '{file}'?	Möchtest du deine Änderungen an „{file}“ wirklich verwerfen?
+	Yes	Ja
+	No	Nein
+	Add media to your project. Drop files anywhere in the window, or choose a source below.	Füge deinem Projekt Medien hinzu. Zieh Dateien an eine beliebige Stelle im Fenster oder wähle unten eine Quelle.
+	Browse files…	Dateien durchsuchen…
+	Movies, audio and stills from disk	Filme, Audio und Standbilder vom Datenträger
+	Demo footage	Demo-Material
+	Six procedural 1080p clips with sound	Sechs prozedural erzeugte 1080p-Clips mit Ton
+	Demo project	Demo-Projekt
+	A cut sequence with transitions, effects and music	Eine Schnittsequenz mit Übergängen, Effekten und Musik
+	Bars and Tone	Farbbalken und Testton
+	SMPTE HD bars with 1 kHz reference tone	SMPTE-HD-Farbbalken mit 1-kHz-Referenzton
+	Community	Community
+	Join us on Discord	Komm zu uns auf Discord
+	OMF Export Settings	OMF-Exporteinstellungen
+	AAF Export Settings	AAF-Exporteinstellungen
+	OMF Title:	OMF-Titel:
+	Mixdown video	Mixdown-Video
+	Audio:	Audio:
+	Encapsulate	Kapseln
+	Separate Audio	Audio trennen
+	Embed	Einbetten
+	Separate Files	Separate Dateien
+	Link to Media	Mit Medien verknüpfen
+	Audio File Format:	Audio-Dateiformat:
+	Sample Rate:	Abtastrate:
+	Bits per Sample:	Bits pro Sample:
+	Rendering:	Rendering:
+	Trim audio files	Audiodateien trimmen
+	Handle Frames:	Handle-Frames:
+	Render audio clip effects	Audioclip-Effekte rendern
+	Breakout to mono	In Mono aufteilen
+	Exported {path}	{path} exportiert
+	Select a clip to view its metadata.	Wähle einen Clip aus, um seine Metadaten anzuzeigen.
+	Clip: {name}	Clip: {name}
+	Open	Öffnen
+	(no sequence)	(keine Sequenz)
+	Show or hide {color} markers	Marker in {color} ein- oder ausblenden
+	Marker	Marker
+	{tc}  Chapter	{tc}  Kapitel
+	No markers. Press M to add one.	Keine Marker. Drücke M, um einen hinzuzufügen.
+	All markers are hidden by the colour filter.	Alle Marker sind durch den Farbfilter ausgeblendet.
+	Type:	Typ:
+	Video:	Video:
+	Codec:	Codec:
+	Duration:	Dauer:
+	Settings:	Einstellungen:
+	Playhead:	Abspielposition:
+	Video {n}:	Video {n}:
+	Audio {n}:	Audio {n}:
+	UI:	UI:
+	{fps} fps · {n} frames queued	{fps} fps · {n} Frames in der Warteschlange
+	{panel} — coming in a later milestone	{panel} — kommt in einem späteren Meilenstein
+	Close Panel	Bedienfeld schließen
+	Close Other Timeline Panels	Andere Timeline-Bedienfelder schließen
+	Close All	Alle schließen
+	Maximize Frame	Bedienfeldrahmen maximieren
+	Restore Frame	Bedienfeldrahmen wiederherstellen
+	Restore Workspace	Arbeitsbereich wiederherstellen
+	Reveal Sequence in Project	Sequenz im Projekt anzeigen
+	Video Thumbnails	Video-Miniaturen
+	Audio Waveforms	Audio-Wellenformen
+	Delete Preset	Vorgabe löschen
+	Export Preset…	Vorgabe exportieren…
+	Import Presets…	Vorgaben importieren…
+	Effect presets	Effektvorgaben
+	Save Preset	Vorgabe speichern
+	Name:	Name:
+	Type	Typ
+	Scale	Skalierung
+	Anchor to In Point	Am In-Punkt verankern
+	Anchor to Out Point	Am Out-Punkt verankern
+	Without keyframes	Ohne Keyframes
+	Description:	Beschreibung:
+	Saved preset “{name}”	Vorgabe „{name}“ gespeichert
+	Current duration {seconds} s	Aktuelle Dauer {seconds} s
+	Remix Properties	Remix-Eigenschaften
+	Target Duration:	Zieldauer:
+	Segments:	Segmente:
+	Fewer · More	Weniger · Mehr
+	Variations:	Variationen:
+	Remixed to {seconds} s	Remix auf {seconds} s
+	{mode} · no clip	{mode} · kein Clip
+	{mode} · no sequence	{mode} · keine Sequenz
+	Remove Row	Zeile entfernen
+	Add a timecode row	Timecode-Zeile hinzufügen
+	Panner	Panner
+	Mute	Stummschalten
+	Send {n} Level	Pegel Send {n}
+	Show Keyframes	Keyframes anzeigen
+	Clip Keyframes	Clip-Keyframes
+	Track Keyframes	Spur-Keyframes
+	Delete	Löschen
+	Untitled Workspace	Unbenannter Arbeitsbereich
+	New Workspace	Neuer Arbeitsbereich
+	Edit Workspaces	Arbeitsbereiche bearbeiten
+	Rename	Umbenennen
+	Restore Original	Original wiederherstellen
+	Search effects	Effekte suchen
+	Apply to Selected Clips	Auf ausgewählte Clips anwenden
+	Metadata Display	Metadatenanzeige
+	Save As New View Preset	Als neue Ansichtsvorgabe speichern
+	Manage Saved View Presets	Gespeicherte Ansichtsvorgaben verwalten
+	Freeform View Options	Optionen für die Freiform-Ansicht
+	Save Arrangement	Anordnung speichern
+	Saves the view, columns, sort, thumbnail and font size.	Speichert Ansicht, Spalten, Sortierung, Miniaturgröße und Schriftgröße.
+	Grid spacing:	Rasterabstand:
+	Default clip size:	Standard-Clipgröße:
+	Snap to grid	Am Raster ausrichten
+	Show clip names	Clipnamen anzeigen
+	Show durations	Dauer anzeigen
+	Show:	Anzeigen:
+	Search fields	Suchfelder
+	Project Metadata	Projekt-Metadaten
+	Add Property…	Eigenschaft hinzufügen…
+	Column order	Spaltenreihenfolge
+	{n}. (empty)	{n}. (leer)
+	Restore	Wiederherstellen
+	Overwrite with Current View	Mit aktueller Ansicht überschreiben
+	Graphics text search arrives with M10.1–M10.2	Die Textsuche in Grafiken kommt mit M10.1–M10.2
+	Open a sequence to work with captions	Eine Sequenz öffnen, um mit Untertiteln zu arbeiten
+	Add captions	Untertitel hinzufügen
+	Create a caption track or import a caption file.	Eine Untertitelspur erstellen oder eine Untertiteldatei importieren.
+	Create new caption track	Neue Untertitelspur erstellen
+	Import captions file…	Untertiteldatei importieren…
+	New {format} track	Neue {format}-Spur
+	Add caption at playhead	Untertitel an Abspielposition hinzufügen
+	Split caption at playhead	Untertitel an Abspielposition aufteilen
+	Merge selected captions	Ausgewählte Untertitel zusammenführen
+	Delete selected captions	Ausgewählte Untertitel löschen
+	No captions on this track. Press + to add one at the playhead.	Keine Untertitel auf dieser Spur. Drücke +, um an der Abspielposition einen hinzuzufügen.
+	No matching captions.	Keine passenden Untertitel.
+	Open a sequence to see its transcript	Eine Sequenz öffnen, um ihr Transkript zu sehen
+	Transcribe sequence	Sequenz transkribieren
+	Speech-to-text turns the dialogue into editable text.	Die Spracherkennung wandelt den Dialog in bearbeitbaren Text um.
+	This build has no speech-to-text; import a transcript with transcript.set.	Diese Version hat keine Spracherkennung; importiere ein Transkript mit transcript.set.
+	Transcribe	Transkribieren
+	Extract selected text	Ausgewählten Text extrahieren
+	Lift selected text	Ausgewählten Text herausheben
+	Remove filler words	Füllwörter entfernen
+	Create captions	Untertitel erstellen
+	Speaker	Sprecher
+	Box	Hintergrundfeld
+	Align	Ausrichten
+	Align left	Links ausrichten
+	Align center	Mittig ausrichten
+	Align right	Rechts ausrichten
+	Position	Position
+	Position: top	Position: oben
+	Position: middle	Position: Mitte
+	Position: bottom	Position: unten
+	(gap)	(Lücke)
+	Out: {name}	Out: {name}
+	In: {name}	In: {name}
+	Play Around Edit (Space loops, Shift+K once)	Um den Schnitt abspielen (Leertaste: Schleife, Shift+K: einmal)
+	Trim Backward Many	Mehrere Frames rückwärts trimmen
+	Trim Backward	Rückwärts trimmen
+	Apply Default Transitions	Standardübergänge anwenden
+	Apply Default Transitions to Selection (Shift+D)	Standardübergänge auf Auswahl anwenden (Shift+D)
+	Trim Forward	Vorwärts trimmen
+	Trim Forward Many	Mehrere Frames vorwärts trimmen
+	Exit Trim Mode	Trimmmodus beenden
+	Voice-over record (right-click: Voice-Over Record Settings…)	Voice-over aufnehmen (Rechtsklick: Voice-over-Aufnahmeeinstellungen…)
+	Voice-Over Record Settings…	Voice-over-Aufnahmeeinstellungen…
+	Recording voice-over…	Voice-over wird aufgenommen…
+	Voice-over recorded: {p}	Voice-over aufgenommen: {p}
+	Voice-over recording stopped (nothing recorded)	Voice-over-Aufnahme beendet (nichts aufgenommen)
+	Post-roll	Nachlauf
+	● Recording	● Aufnahme
+	Voice-Over Record Settings	Voice-over-Aufnahmeeinstellungen
+	Source:	Quelle:
+	Default Input	Standardeingang
+	Input:	Eingang:
+	Channel {n}	Kanal {n}
+	Countdown Sound Cues	Countdown-Tonsignale
+	Pre-roll:	Vorlauf:
+	 seconds	 Sekunden
+	Post-roll:	Nachlauf:
+	Playback starts the pre-roll before the playhead (or the In point); with In/Out marked, recording punches in and out there.	Die Wiedergabe beginnt mit dem Vorlauf vor der Abspielposition (oder dem In-Punkt); sind In- und Out-Punkt gesetzt, beginnt und endet die Aufnahme dort.
+	Effect	Effekt
+	Clip Fx Editor	Clip-Fx-Editor
+	Track Fx Editor	Spur-Fx-Editor
+	Master Gain	Master-Verstärkung
+	Reset	Zurücksetzen
+	Band {n}	Band {n}
+	Solo	Solo
+	Bypass	Umgehen
+	Thr	Schw.
+	Ratio	Verhältnis
+	Att	Anspr.
+	Rel	Ausk.
+	Gain	Verstärkung
+	Output Gain	Ausgangsverstärkung
+	Limiter	Limiter
+	Link Channels	Kanäle verknüpfen
+	Limiter Threshold	Limiter-Schwellenwert
+	Limiter Release	Limiter-Ausklang
+	Auto Gate	Auto-Gate
+	Threshold	Schwellenwert
+	Attack	Ansprechzeit
+	Release	Ausklang
+	Hold	Halten
+	Compressor	Kompressor
+	Auto Makeup	Auto-Makeup
+	Makeup	Makeup
+	Expander	Expander
+	Soft Clip	Soft Clip
+	(no sequences)	(keine Sequenzen)
+	(no clips)	(keine Clips)
+	Show Transport Controls	Transportsteuerung anzeigen
+	Loop	Schleife
+	Multi-Camera Audio Follows Video	Mehrkamera-Audio folgt Video
+	Multi-Camera Record	Mehrkamera-Aufnahme
+	Multi-Camera Selection Top Down	Mehrkamera-Auswahl von oben nach unten
+	Show Multi-Camera Preview Monitor	Mehrkamera-Vorschaumonitor anzeigen
+	Auto-Adjust Multi-Camera Playback Quality	Mehrkamera-Wiedergabequalität automatisch anpassen
+	Transmit Multi-Camera View	Mehrkameraansicht übertragen
