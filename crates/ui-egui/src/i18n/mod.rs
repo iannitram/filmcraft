@@ -1104,7 +1104,9 @@ mod tests {
     }
 
     /// German covers at least the core menus (`core_menu_labels`, the top-level menus and the native
-    /// macOS app menu); every entry must still be a menu label.
+    /// macOS app menu). Every entry must still be a menu label or have a Spanish counterpart (the
+    /// Spanish catalog covers every `tl!` literal), so a renamed or removed source can't leave a dead
+    /// German entry.
     #[test]
     fn german_entries_cover_the_original_menu_catalog() {
         let app = crate::FilmcraftApp::new(filmcraft_engine::Session::default());
@@ -1112,7 +1114,10 @@ mod tests {
         let known = |text: &str| crate::menus::MENUS.contains(&text) || items.iter().any(|it| it.label == text || it.path.iter().any(|p| p == text));
         let (entries, _) = catalog::parse_entries(include_str!("de.tsv"));
         for (_, en, _) in entries {
-            assert!(known(&en) || crate::menus::NATIVE_APP_MENU.contains(&en.as_str()), "not a menu label: {en}");
+            assert!(
+                known(&en) || crate::menus::NATIVE_APP_MENU.contains(&en.as_str()) || Language::Es.has(&en),
+                "German entry that is neither a menu label nor in the Spanish catalog: {en}"
+            );
         }
         for en in core_menu_labels() {
             assert!(Language::De.has(&en), "missing German menu label: {en}");
