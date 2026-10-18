@@ -218,7 +218,7 @@ pub fn factory(format: Format, w: u32, h: u32, rate: FrameRate, s: &ExportSettin
         // H.265 through NVENC is Windows-only for now; on Linux this backend takes H.264 only
         return if cfg!(target_os = "windows") { hevc_factory(w, h, rate, s) } else { None };
     }
-    factory_with(format, w, h, rate, s, |cfg| open(cfg, &Signal::default()))
+    factory_with(format, w, h, rate, s, |cfg| open(cfg, &Signal::default()), super::available)
 }
 
 /// Open the encoder for `cfg`. An 8-bit one takes the export's RGBA pictures as they are and converts
@@ -235,7 +235,8 @@ fn open(cfg: &Config, signal: &Signal) -> std::result::Result<Nvenc, String> {
     })
 }
 
-/// The H.264 side of [`factory`], with the driver call (`open`) passed in so tests can stand in for it.
+/// The H.264 side of [`factory`], with the driver calls (`open`, and `available`, whether this machine
+/// has NVENC at all) passed in so tests can stand in for them.
 fn factory_with(
     format: Format,
     w: u32,
@@ -243,6 +244,7 @@ fn factory_with(
     rate: FrameRate,
     s: &ExportSettings,
     open: impl FnOnce(&Config) -> std::result::Result<Nvenc, String>,
+    available: impl FnOnce() -> bool,
 ) -> Option<Result<Box<dyn VideoEncoder>>> {
     if s.hardware_encoding != HardwareEncoding::Auto || format != Format::H264 {
         return None;
@@ -260,6 +262,13 @@ fn factory_with(
         Ok(enc) => {
             filmcraft_export::note_hw_encode_session();
             Some(Ok(Box::new(new_encoder(enc, w, h, rate, s.signal))))
+        }
+        // ours (self-logging): no NVIDIA driver or library (`libnvidia-encode.so.1` not found) is no
+        // hardware encoder, not a decline, so the export's decision line says "no hardware H.264
+        // encoder" (Legion Go, 2026-10-18). Asked only after a failed open, so a working GPU pays nothing.
+        Err(why) if !available() => {
+            log::info!("no hardware H.264 encoder: {why}");
+            None
         }
         Err(why) => declined(&why),
     }
@@ -297,8 +306,9 @@ mod tests {
 
     #[test]
     fn off_and_unsupported_settings_never_open_the_driver() {
+        let _turn = COUNTER.lock().unwrap_or_else(|e| e.into_inner());
         let declined = |format, w, h, s: &ExportSettings| {
-            assert!(factory_with(format, w, h, FrameRate::FPS_24, s, |_| panic!("must not open the driver")).is_none());
+            assert!(factory_with(format, w, h, FrameRate::FPS_24, s, |_| panic!("must not open the driver"), || panic!("must not probe the driver")).is_none());
         };
         let mut s = ExportSettings { hardware_encoding: HardwareEncoding::Off, ..Default::default() };
         declined(Format::H264, 640, 360, &s);
@@ -313,19 +323,36 @@ mod tests {
         declined(Format::H264, 640, 360, &s);
     }
 
+    /// The decline counter is global: tests that read it take turns.
+    static COUNTER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
-    fn missing_or_rejecting_driver_declines_for_software_fallback() {
+    fn a_rejecting_driver_declines_for_software_fallback() {
+        let _turn = COUNTER.lock().unwrap_or_else(|e| e.into_inner());
         let s = ExportSettings { hardware_encoding: HardwareEncoding::Auto, ..Default::default() };
+        let before = filmcraft_export::hw_encode_stats().declined;
         let mut attempted = false;
         assert!(
             factory_with(Format::H264, 640, 360, FrameRate::FPS_24, &s, |cfg| {
                 attempted = true;
                 assert_eq!((cfg.width, cfg.height), (640, 360));
-                Err("no NVIDIA encoder driver".into())
-            })
+                Err("the encoder refused this configuration".into())
+            }, || true)
             .is_none()
         );
         assert!(attempted);
+        assert_eq!(filmcraft_export::hw_encode_stats().declined, before + 1);
+    }
+
+    #[test]
+    fn a_missing_driver_is_no_hardware_encoder_not_a_decline() {
+        // ours (self-logging), Legion Go 2026-10-18: Auto with no NVIDIA logged "declined"
+        let _turn = COUNTER.lock().unwrap_or_else(|e| e.into_inner());
+        let s = ExportSettings { hardware_encoding: HardwareEncoding::Auto, ..Default::default() };
+        let before = filmcraft_export::hw_encode_stats().declined;
+        let missing = || Err("no NVIDIA encoder driver: libnvidia-encode.so.1: cannot open shared object file".into());
+        assert!(factory_with(Format::H264, 640, 360, FrameRate::FPS_24, &s, |_| missing(), || false).is_none());
+        assert_eq!(filmcraft_export::hw_encode_stats().declined, before);
     }
 
     #[test]

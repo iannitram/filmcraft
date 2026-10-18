@@ -49,4 +49,16 @@ mod tests {
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert!(lines[0].contains("H.264 encoded by built-in (software) (Hardware Encoding is off)"), "{}", lines[0]);
     }
+
+    #[test]
+    fn auto_with_no_hardware_factory_says_there_is_none() {
+        // Legion Go, 2026-10-18: Auto on a machine with no hardware encoder said "declined".
+        // This crate registers no hardware factory, as on a machine without one.
+        let _log = craft_log::testing::capture();
+        let s = ExportSettings { format: Format::H264, hardware_encoding: HardwareEncoding::Auto, ..Default::default() };
+        let enc = crate::job::make_venc(&s, 64, 48, filmcraft_time::FrameRate::new(30, 1)).expect("the built-in H.264 encoder");
+        assert_eq!(enc.encoder_name(), crate::BUILT_IN_ENCODER);
+        let lines: Vec<String> = craft_log::testing::captured().into_iter().filter(|l| l.contains("decision: export:")).collect();
+        assert!(lines.iter().any(|l| l.contains("H.264 encoded by built-in (software) (no hardware H.264 encoder on this machine)")), "{lines:?}");
+    }
 }
