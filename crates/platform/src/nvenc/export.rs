@@ -333,11 +333,19 @@ mod tests {
         let before = filmcraft_export::hw_encode_stats().declined;
         let mut attempted = false;
         assert!(
-            factory_with(Format::H264, 640, 360, FrameRate::FPS_24, &s, |cfg| {
-                attempted = true;
-                assert_eq!((cfg.width, cfg.height), (640, 360));
-                Err("the encoder refused this configuration".into())
-            }, || true)
+            factory_with(
+                Format::H264,
+                640,
+                360,
+                FrameRate::FPS_24,
+                &s,
+                |cfg| {
+                    attempted = true;
+                    assert_eq!((cfg.width, cfg.height), (640, 360));
+                    Err("the encoder refused this configuration".into())
+                },
+                || true
+            )
             .is_none()
         );
         assert!(attempted);

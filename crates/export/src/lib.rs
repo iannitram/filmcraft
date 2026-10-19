@@ -15,10 +15,10 @@
 
 use std::io::Write;
 
-mod encoder_decision; // ours (self-logging)
 mod aac_out;
 mod audio_out;
 mod deflate;
+mod encoder_decision; // ours (self-logging)
 mod job;
 mod mxf_out;
 mod pace;
