@@ -31,19 +31,19 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
     write_via(path, data, &temp_path(path))
 }
 
+/// [`atomic_write`] through the temp file `tmp`. A temp file this call did not create (a name
+/// collision with another writer) is never removed: only one `create_new` succeeded on it.
 fn write_via(path: &Path, data: &[u8], tmp: &Path) -> io::Result<()> {
-    let tmp = tmp.to_path_buf();
+    // closed before the rename
+    let mut f = OpenOptions::new().write(true).create_new(true).open(tmp)?;
     let r = (|| {
-        {
-            // closed before the rename
-            let mut f = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
-            f.write_all(data)?;
-            f.sync_all()?;
-        }
-        fs::rename(&tmp, path)
+        f.write_all(data)?;
+        f.sync_all()?;
+        drop(f);
+        fs::rename(tmp, path)
     })();
     if let Err(e) = r {
-        let _ = fs::remove_file(&tmp);
+        let _ = fs::remove_file(tmp);
         return Err(e);
     }
     sync_dir(&parent_dir(path));

@@ -4347,7 +4347,15 @@ fn write_project(s: &mut Session, path: &str, adopt: bool) -> Result<Value> {
             backup = Some(b);
         }
     }
+    // the auto-save worker writes this file under the same lock (FX2)
+    let gate = s.persistence.as_ref().map(|p| p.gate.clone());
+    let mut written = gate.as_ref().map(crate::autosave::lock_gate);
     s.services.write_file(path, &bytes).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    if let Some(w) = written.as_mut() {
+        w.path = Some(path.to_string());
+        w.revision = w.revision.max(s.revision);
+    }
+    drop(written);
     if adopt {
         s.path = Some(path.to_string());
         s.previews_follow_path();
@@ -4429,15 +4437,26 @@ fn recover(s: &mut Session, id: Option<&str>) -> Result<Value> {
         s.events.push(crate::Event::OpenSequence(seq));
     }
     crate::relink::on_open(s);
-    // Our own journal must hold the recovered state before the old one is deleted.
+    // Our own journal must hold the recovered state before the old one is deleted (FX3): when it
+    // doesn't (journalling off, a failed write, no answer) the original stays for the next launch.
     s.sync_persistence();
+    let held = s.persistence.as_ref().and_then(|p| p.flush());
+    let journaled = held == Some(s.revision);
     if let Some(per) = s.persistence.as_mut() {
-        per.flush();
         per.candidates.remove(idx);
     }
-    crate::autosave::discard_candidate(&c).map_err(|e| EngineError::Other(e.to_string()))?;
-    s.toast(format!("Recovered unsaved changes to {} from {saved_at}", c.meta.project_name));
-    Ok(json!({"id": c.id, "name": c.meta.project_name, "path": c.meta.project_path, "savedAt": saved_at, "revision": c.meta.revision}))
+    if journaled {
+        crate::autosave::discard_candidate(&c).map_err(|e| EngineError::Other(e.to_string()))?;
+        s.toast(format!("Recovered unsaved changes to {} from {saved_at}", c.meta.project_name));
+    } else {
+        s.toast(format!(
+            "Recovered unsaved changes to {} from {saved_at}; the recovery copy is kept until the next launch because the recovery journal does not hold them",
+            c.meta.project_name
+        ));
+    }
+    Ok(
+        json!({"id": c.id, "name": c.meta.project_name, "path": c.meta.project_path, "savedAt": saved_at, "revision": c.meta.revision, "keptOriginal": !journaled}),
+    )
 }
 
 /// Where auto-saves of the current project go.
