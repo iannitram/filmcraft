@@ -498,14 +498,72 @@ pub fn auto_relink(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"relinked": rows, "failed": failed, "remaining": s.offline.missing.iter().map(|i| i.0).collect::<Vec<_>>()}))
 }
 
-/// Files under `root` by lower-case file name (breadth-first, at most `limit` files).
+/// Independent bounds on the folder search's work, empty and hidden directories included (FX7).
+#[derive(Clone, Copy)]
+struct SearchLimits {
+    directories: usize,
+    entries: usize,
+    depth: usize,
+}
+
+const SEARCH_LIMITS: SearchLimits = SearchLimits { directories: 20_000, entries: 200_000, depth: 64 };
+
+/// A link or (on Windows) any reparse point, junctions included: the search never follows one.
+fn is_link(meta: &std::fs::Metadata) -> bool {
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        // FILE_ATTRIBUTE_REPARSE_POINT: junctions are not reported as symlinks
+        if meta.file_attributes() & 0x400 != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+/// Files under `root` by lower-case file name (breadth-first, sorted within each folder, at most
+/// `limit` files). The chosen folder may itself be a link; links inside it are not followed, each
+/// folder is visited once, nothing outside `root` is listed, and the search stops at the folder,
+/// entry or depth budget (FX7).
 pub fn index_folder(root: &Path, limit: usize) -> BTreeMap<String, Vec<PathBuf>> {
+    index_folder_with_limits(root, limit, SEARCH_LIMITS)
+}
+
+fn index_folder_with_limits(root: &Path, limit: usize, limits: SearchLimits) -> BTreeMap<String, Vec<PathBuf>> {
     let mut out: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
-    let mut queue = std::collections::VecDeque::from([root.to_path_buf()]);
-    let mut n = 0;
-    while let Some(d) = queue.pop_front() {
+    if limit == 0 || limits.directories == 0 {
+        return out;
+    }
+    let Ok(real_root) = std::fs::canonicalize(root) else { return out };
+    let mut visited = std::collections::BTreeSet::new();
+    let mut queue = std::collections::VecDeque::from([(root.to_path_buf(), 0)]);
+    let (mut scheduled, mut examined, mut files) = (1, 0, 0);
+    while let Some((d, depth)) = queue.pop_front() {
+        // the chosen folder is followed when it is a link; folders found inside it never are
+        let meta = if depth == 0 { std::fs::metadata(&d) } else { std::fs::symlink_metadata(&d) };
+        let Ok(meta) = meta else { continue };
+        if !meta.is_dir() || (depth > 0 && is_link(&meta)) {
+            continue;
+        }
+        let Ok(real) = std::fs::canonicalize(&d) else { continue };
+        if !real.starts_with(&real_root) || !visited.insert(real) {
+            continue;
+        }
+        if examined >= limits.entries {
+            break;
+        }
         let Ok(rd) = std::fs::read_dir(&d) else { continue };
-        let mut entries: Vec<_> = rd.filter_map(|e| e.ok()).collect();
+        // bounded before sorting; hidden entries and unreadable ones spend the budget too
+        let mut entries = Vec::new();
+        for entry in rd.take(limits.entries - examined) {
+            examined += 1;
+            if let Ok(e) = entry {
+                entries.push(e);
+            }
+        }
         entries.sort_by_key(|e| e.file_name());
         for e in entries {
             let p = e.path();
@@ -513,12 +571,19 @@ pub fn index_folder(root: &Path, limit: usize) -> BTreeMap<String, Vec<PathBuf>>
             if name.starts_with('.') {
                 continue;
             }
-            if p.is_dir() {
-                queue.push_back(p);
-            } else {
+            let Ok(meta) = std::fs::symlink_metadata(&p) else { continue };
+            if is_link(&meta) {
+                continue;
+            }
+            if meta.is_dir() {
+                if depth < limits.depth && scheduled < limits.directories {
+                    queue.push_back((p, depth + 1));
+                    scheduled += 1;
+                }
+            } else if meta.is_file() {
                 out.entry(name.to_ascii_lowercase()).or_default().push(p);
-                n += 1;
-                if n >= limit {
+                files += 1;
+                if files >= limit {
                     return out;
                 }
             }
@@ -891,4 +956,34 @@ pub fn on_open(s: &mut Session) -> usize {
         s.toast(format!("{} media file(s) are missing; File ▸ Link Media… reconnects them", s.offline.missing.len()));
     }
     list.len()
+}
+
+#[cfg(test)]
+mod folder_index_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_tree_keeps_breadth_first_order_and_respects_each_budget() {
+        let root = crate::media_test_util::tmp_dir("index-budgets");
+        let paths: Vec<_> = ["take.mov", "a/take.mov", "z/take.mov", "a/deep/take.mov"].iter().map(|p| root.join(p)).collect();
+        for p in &paths {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"media").unwrap();
+        }
+        assert_eq!(index_folder(&root, 20_000)["take.mov"], paths);
+        assert_eq!(index_folder(&root, 2)["take.mov"], paths[..2]);
+        assert!(index_folder(&root, 0).is_empty());
+        for limits in [SearchLimits { directories: 1, ..SEARCH_LIMITS }, SearchLimits { depth: 0, ..SEARCH_LIMITS }] {
+            assert_eq!(index_folder_with_limits(&root, 20_000, limits)["take.mov"], paths[..1]);
+        }
+        assert_eq!(index_folder_with_limits(&root, 20_000, SearchLimits { depth: 1, ..SEARCH_LIMITS })["take.mov"], paths[..3]);
+        // spending the only entry on a folder leaves nothing to examine inside it
+        let limits = SearchLimits { entries: 1, ..SEARCH_LIMITS };
+        assert!(index_folder_with_limits(&root.join("a/deep"), 20_000, SearchLimits { entries: 0, ..limits }).is_empty());
+        let entry_root = root.join("entry-budget");
+        std::fs::create_dir_all(entry_root.join("child")).unwrap();
+        std::fs::write(entry_root.join("child/movie.mov"), b"media").unwrap();
+        assert!(index_folder_with_limits(&entry_root, 20_000, limits).is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
