@@ -206,13 +206,20 @@ pub(crate) fn hdr_output(working_hdr: bool, sdr: bool, format: Format, hdr_avail
         }
 }
 
-fn make_venc(settings: &ExportSettings, w: u32, h: u32, rate: FrameRate) -> Result<Box<dyn VideoEncoder>> {
-    video_factories()
+pub(crate) fn make_venc(settings: &ExportSettings, w: u32, h: u32, rate: FrameRate) -> Result<Box<dyn VideoEncoder>> {
+    let declined = crate::hw_encode_stats().declined;
+    let enc = video_factories()
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .iter()
         .find_map(|fac| fac(settings.video_format(), w, h, rate, settings))
-        .ok_or_else(|| ExportError::Unsupported(format!("{} encoder not available yet", settings.video_format().label())))?
+        .ok_or_else(|| ExportError::Unsupported(format!("{} encoder not available yet", settings.video_format().label())))??;
+    // ours (self-logging): which encoder took the export, and why
+    log::info!(
+        "{}",
+        crate::encoder_decision::line(settings.video_format(), enc.encoder_name(), settings.hardware_encoding, crate::hw_encode_stats().declined > declined)
+    );
+    Ok(enc)
 }
 
 impl Exporter {

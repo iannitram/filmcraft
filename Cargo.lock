@@ -1960,6 +1960,7 @@ dependencies = [
 name = "filmcraft-export"
 version = "0.9.0"
 dependencies = [
+ "craft-log",
  "filmcraft-aac",
  "filmcraft-apv",
  "filmcraft-audio-dsp",
@@ -1980,6 +1981,7 @@ dependencies = [
  "filmcraft-text",
  "filmcraft-time",
  "image",
+ "log",
  "rayon",
  "serde",
  "serde_json",
