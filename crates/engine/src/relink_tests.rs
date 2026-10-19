@@ -610,3 +610,40 @@ fn deleting_bin_preserves_intermediate_subclip_needed_by_surviving_clip() {
     assert_eq!(s.project.root.parent_of(parent), Some(bin));
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn folder_index_does_not_follow_outside_symlinks_or_cycles() {
+    // FX7: the folder search followed directory links (outside the chosen tree, and in cycles).
+    use std::{fs, os::unix::fs::symlink};
+    let root = tmp_dir("index-links");
+    let chosen = root.join("chosen");
+    let outside = root.join("outside");
+    fs::create_dir_all(chosen.join("child")).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(chosen.join("local.mov"), b"local").unwrap();
+    fs::write(outside.join("outside.mov"), b"outside").unwrap();
+    symlink(&outside, chosen.join("outside-link")).unwrap();
+    symlink(&chosen, chosen.join("child/cycle")).unwrap();
+    // The old file limit makes even the broken walker terminate despite the cycle.
+    let index = crate::relink::index_folder(&chosen, 20);
+    assert!(!index.contains_key("outside.mov"), "must stay inside the chosen folder");
+    assert_eq!(index["local.mov"], vec![chosen.join("local.mov")], "must visit each directory once");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn folder_index_searches_a_chosen_folder_that_is_itself_a_link() {
+    // The folder the user picks may itself be a link (a media folder linked to another drive):
+    // links inside it are not followed, but the chosen folder is.
+    use std::{fs, os::unix::fs::symlink};
+    let root = tmp_dir("index-linked-root");
+    let real = root.join("real");
+    fs::create_dir_all(real.join("day1")).unwrap();
+    fs::write(real.join("day1/take.mov"), b"media").unwrap();
+    symlink(&real, root.join("Videos")).unwrap();
+    let index = crate::relink::index_folder(&root.join("Videos"), 20);
+    assert_eq!(index["take.mov"], vec![root.join("Videos/day1/take.mov")]);
+    fs::remove_dir_all(root).unwrap();
+}
