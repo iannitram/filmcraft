@@ -1358,7 +1358,7 @@ fn build() -> Vec<CommandSpec> {
                             ids.push(id.0);
                             image_sequences.push(json!({"item": id.0, "frames": frames, "missing": missing}));
                         }
-                        Err(e) => errors.push(format!("{path}: {e}")),
+                        Err(e) => refuse_import(&mut errors, &path, e),
                     }
                     continue;
                 }
@@ -1381,13 +1381,13 @@ fn build() -> Vec<CommandSpec> {
                 match read {
                     Ok(_) if streamed => match import_streamed(s, &path, bin) {
                         Ok(id) => ids.push(id.0),
-                        Err(e) => errors.push(format!("{path}: {e}")),
+                        Err(e) => refuse_import(&mut errors, &path, e),
                     },
                     Ok(b) => {
                         if let Some(fmt) = crate::captions::detect(&path, &b) {
                             match crate::captions::import(s, &path, &b, fmt, None) {
                                 Ok(r) => reports.push(r),
-                                Err(e) => errors.push(format!("{path}: {e}")),
+                                Err(e) => refuse_import(&mut errors, &path, e),
                             }
                         } else if let Some(fmt) = crate::interchange::detect(&path, &b) {
                             match crate::interchange::import(s, &path, &b, fmt) {
@@ -1395,16 +1395,16 @@ fn build() -> Vec<CommandSpec> {
                                     sequences.extend(r["sequences"].as_array().cloned().unwrap_or_default());
                                     reports.push(r);
                                 }
-                                Err(e) => errors.push(format!("{path}: {e}")),
+                                Err(e) => refuse_import(&mut errors, &path, e),
                             }
                         } else {
                             match import_bytes(s, &path, b.into(), bin) {
                                 Ok(id) => ids.push(id.0),
-                                Err(e) => errors.push(format!("{path}: {e}")),
+                                Err(e) => refuse_import(&mut errors, &path, e),
                             }
                         }
                     }
-                    Err(e) => errors.push(format!("{path}: {e}")),
+                    Err(e) => refuse_import(&mut errors, &path, e),
                 }
             }
             if ids.is_empty() && sequences.is_empty() && reports.is_empty() && !errors.is_empty() {
@@ -4457,4 +4457,14 @@ fn auto_save_dir(s: &Session) -> std::path::PathBuf {
 
 fn auto_save_name(s: &Session) -> String {
     s.path.as_deref().and_then(|p| std::path::Path::new(p).file_stem()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| s.project.name.clone())
+}
+
+/// A file `file.import` refused: the reply names it by its path, and the app's own log says so at
+/// WARN by its file name only (ours: a damaged `.prproj` was refused with the log silent, Legion Go
+/// 2026-10-19).
+fn refuse_import(errors: &mut Vec<String>, path: &str, e: impl std::fmt::Display) {
+    let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "(no name)".into());
+    let why = e.to_string().replace(path, &name);
+    log::warn!("import refused: {name}: {why}");
+    errors.push(format!("{path}: {e}"));
 }
