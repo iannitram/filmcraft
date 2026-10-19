@@ -193,9 +193,18 @@ impl State {
         self.frames.get(&pts).filter(|_| draft_ok || !self.drafts.contains(&pts))
     }
 
-    /// The nearest usable frame at or before `pts` (robust to decoder pts quirks).
-    fn at_or_before(&self, pts: i64, draft_ok: bool) -> Option<Arc<VideoFrame>> {
-        self.cached(pts, draft_ok).or_else(|| self.frames.range(..=pts).rev().find(|(p, _)| draft_ok || !self.drafts.contains(p)).map(|(_, f)| f)).cloned()
+    /// The nearest usable frame at or before `pts` but after `floor` (robust to decoder pts quirks:
+    /// a picture stamped a little early still counts). `floor` is the time of the sample before the
+    /// wanted one, so another sample's picture, or one cached before a decoder reset, is never
+    /// returned for a frame the decoder did not produce (ours: FX9, Codex review 2026-10-19).
+    fn at_or_before(&self, pts: i64, floor: i64, draft_ok: bool) -> Option<Arc<VideoFrame>> {
+        use std::ops::Bound::{Excluded, Included};
+        if floor >= pts {
+            return self.cached(pts, draft_ok).cloned();
+        }
+        self.cached(pts, draft_ok)
+            .or_else(|| self.frames.range((Excluded(floor), Included(pts))).rev().find(|(p, _)| draft_ok || !self.drafts.contains(p)).map(|(_, f)| f))
+            .cloned()
     }
 }
 
@@ -766,8 +775,10 @@ impl GopCache {
             self.store_output(st, out);
             st.next = usize::MAX;
         }
-        // nearest decoded frame at or before the wanted pts (robust to decoder pts quirks)
-        st.at_or_before(want_pts, draft).ok_or_else(|| CodecError::Decode("frame not produced".into()))
+        // nearest decoded frame at or before the wanted pts (robust to decoder pts quirks), but never
+        // at or before the previous sample's time: that would be another sample's picture
+        let floor = (st.start.min(i).saturating_sub(1)..limit).map(|k| s.pts(k)).filter(|&p| p < want_pts).max().unwrap_or(i64::MIN);
+        st.at_or_before(want_pts, floor, draft).ok_or_else(|| CodecError::Decode("frame not produced".into()))
     }
 
     /// A nested request (see [`Self::frame`]): decode from the sync sample with a fresh decoder,
@@ -860,7 +871,8 @@ impl GopCache {
         for (pts, frame, draft) in res? {
             self.store_finished(&mut st, pts, frame, draft);
         }
-        st.at_or_before(want_pts, true).ok_or_else(|| CodecError::Decode("frame not produced".into()))
+        let floor = i.checked_sub(1).map(|k| s.pts(k)).filter(|&p| p < want_pts).unwrap_or(i64::MIN);
+        st.at_or_before(want_pts, floor, true).ok_or_else(|| CodecError::Decode("frame not produced".into()))
     }
 }
 
@@ -973,6 +985,95 @@ mod tests {
         match &f.data {
             filmcraft_frame::PixelData::Rgba8(d) => d[0] as usize | (d[1] as usize) << 8,
             _ => unreachable!(),
+        }
+    }
+
+    /// Samples whose decoder never outputs the picture at `missing` and outputs every other picture
+    /// `shift` ticks early (a pts quirk).
+    struct Lossy {
+        inner: Samples,
+        missing: i64,
+        shift: i64,
+    }
+
+    struct LossyDec {
+        inner: Box<dyn VideoDecoder>,
+        missing: i64,
+        shift: i64,
+    }
+
+    impl LossyDec {
+        fn keep(&self, out: Vec<DecodedFrame>) -> Vec<DecodedFrame> {
+            out.into_iter()
+                .filter(|f| f.pts != self.missing)
+                .map(|mut f| {
+                    f.pts -= self.shift;
+                    f
+                })
+                .collect()
+        }
+    }
+
+    impl VideoDecoder for LossyDec {
+        fn decode(&mut self, sample: &[u8], pts: i64) -> crate::Result<Vec<DecodedFrame>> {
+            let out = self.inner.decode(sample, pts)?;
+            Ok(self.keep(out))
+        }
+        fn flush(&mut self) -> Vec<DecodedFrame> {
+            let out = self.inner.flush();
+            self.keep(out)
+        }
+        fn reset(&mut self) {
+            self.inner.reset()
+        }
+        fn name(&self) -> &str {
+            "lossy"
+        }
+    }
+
+    impl VideoSamples for Lossy {
+        fn count(&self) -> usize {
+            self.inner.count()
+        }
+        fn pts(&self, i: usize) -> i64 {
+            self.inner.pts(i)
+        }
+        fn sync_before(&self, i: usize) -> usize {
+            self.inner.sync_before(i)
+        }
+        fn sample_at(&self, t: i64) -> Option<usize> {
+            self.inner.sample_at(t)
+        }
+        fn read(&self, i: usize) -> crate::Result<Vec<u8>> {
+            self.inner.read(i)
+        }
+        fn make_decoder(&self) -> crate::Result<Box<dyn VideoDecoder>> {
+            Ok(Box::new(LossyDec { inner: self.inner.make_decoder()?, missing: self.missing, shift: self.shift }))
+        }
+    }
+
+    #[test]
+    fn a_frame_the_decoder_never_produced_is_an_error_not_the_previous_picture() {
+        // FX9 (ours, Codex review 2026-10-19): sample 1 is never output; frame 1 used to come back
+        // as frame 0
+        let s = Lossy { inner: samples(10, 10, 0, false), missing: 1000, shift: 0 };
+        let c = GopCache::new(None);
+        assert_eq!(index_of(&c.frame(&s, 0).expect("frame 0")), 0);
+        let got = c.frame(&s, 1000);
+        assert!(got.is_err(), "frame 1 was never decoded, but came back as frame {}", got.map(|f| index_of(&f)).unwrap_or(usize::MAX));
+        // a picture from before a decoder reset is not one either: frame 2, then a seek away and
+        // back, then frame 1 again
+        assert_eq!(index_of(&c.frame(&s, 2000).expect("frame 2")), 2);
+        assert!(c.frame(&s, 1000).is_err(), "after a reset frame 1 is still missing, not an older picture");
+    }
+
+    #[test]
+    fn a_frame_output_a_little_early_is_still_found() {
+        // the tolerance at_or_before exists for: a decoder that stamps each picture 1 tick early
+        let s = Lossy { inner: samples(10, 10, 0, false), missing: -1, shift: 1 };
+        let c = GopCache::new(None);
+        for i in [0usize, 1, 5, 3] {
+            assert_eq!(index_of(&c.frame(&s, i as i64 * 1000).expect("frame")), i, "frame {i}");
         }
     }
 
