@@ -7,9 +7,10 @@
 //! them to an [`Accel`] (the libva session on Linux, a recording stand-in in tests), then reads
 //! back the pictures the DPB outputs. What the hardware path does not take is an error, so the
 //! hybrid decoder replays the run in software: field / MBAFF coding, FMO, SP / SI and data
-//! partitioning, stream changes the surfaces were not made for, pictures predicted from a
-//! frame_num gap. After a start at a non-IDR picture (an open-GOP seek) the leading pictures,
-//! predicted from frames before the start, are concealed ([`Held::Missing`]).
+//! partitioning, stream changes the surfaces were not made for, and on a driver held to decoded
+//! references ([`Accel::decoded_refs_only`], Mesa radeonsi) pictures predicted from a frame_num gap.
+//! There, after a start at a non-IDR picture (an open-GOP seek), the leading pictures, predicted
+//! from frames before the start, are concealed ([`Held::Missing`]).
 //!
 //! Safe code; compiled on every target so its logic is tested everywhere.
 
@@ -248,10 +249,12 @@ impl<A: Accel> Front<A> {
         if lists.iter().flatten().any(|(_, is_ref, _)| !is_ref) {
             return Err(decode_err("a reference picture is missing"));
         }
-        if lists.iter().flatten().any(|(_, _, held)| *held == Held::Gap) {
+        // drivers that take stand-in references (decoded_refs_only false) are given them, as before
+        let strict = self.accel.decoded_refs_only();
+        if strict && lists.iter().flatten().any(|(_, _, held)| *held == Held::Gap) {
             return Err(unsupported("a picture predicted from a frame_num gap"));
         }
-        let conceal = lists.iter().flatten().any(|(_, _, held)| *held == Held::Missing);
+        let conceal = strict && lists.iter().flatten().any(|(_, _, held)| *held == Held::Missing);
         let refs = lists.map(|l| l.into_iter().map(|(p, _, _)| p).collect::<Vec<_>>());
         let params = slice_params(&sh, nal.len(), &refs)?;
         if let Some(p) = self.pending.as_mut() {
@@ -351,9 +354,11 @@ impl<A: Accel> Front<A> {
             BottomFieldOrderCnt: p.poc.bottom,
             va_reserved: [0; ffi::VA_PADDING_LOW],
         };
-        // stand-ins are not listed: no picture handed to the hardware is predicted from one, and
-        // leaving out entries no list uses keeps the lists the hardware builds the same
-        let decoded = self.dpb.entries.iter().filter(|e| e.mark != RefMark::Unused && e.frame.held == Held::Decoded);
+        // on a driver held to decoded references (radeonsi) stand-ins are not listed: no picture
+        // handed to it is predicted from one, and leaving out entries no list uses keeps the lists
+        // the hardware builds the same
+        let strict = self.accel.decoded_refs_only();
+        let decoded = self.dpb.entries.iter().filter(|e| e.mark != RefMark::Unused && (e.frame.held == Held::Decoded || !strict));
         for (slot, e) in pic.ReferenceFrames.iter_mut().zip(decoded) {
             *slot = va_ref(e, surfaces);
         }

@@ -27,13 +27,15 @@ struct Recorder {
     filled: Vec<bool>,
     pictures: usize,
     frame: VideoFrame,
+    /// [`Accel::decoded_refs_only`]: true like radeonsi, false like a driver that takes stand-ins.
+    strict: bool,
 }
 
 impl Recorder {
     fn new(count: usize) -> Self {
         let g = Geometry { crop: (0, 0, 2, 2), bits: 8, color: Default::default(), par: (1, 1) };
         let frame = biplanar::to_frame(&Biplanar { luma: &[128; 4], chroma: &[128; 2], stride: 2, rows: 2 }, &g).unwrap();
-        Self { ids: (0..count as u32).map(|i| 0x100 + i).collect(), decoded: vec![false; count], filled: vec![false; count], pictures: 0, frame }
+        Self { ids: (0..count as u32).map(|i| 0x100 + i).collect(), decoded: vec![false; count], filled: vec![false; count], pictures: 0, frame, strict: true }
     }
 }
 
@@ -108,7 +110,7 @@ impl Accel for Recorder {
             assert!(self.decoded[i], "reference surface {i} holds a picture");
             // never a stand-in ([`Accel::fill`]): a driver keeping its own copy of each picture it
             // decoded has none for one (and list entries are reference frames, checked below)
-            assert!(!self.filled[i], "reference surface {i} holds a picture the hardware decoded, not a stand-in");
+            assert!(!self.strict || !self.filled[i], "reference surface {i} holds a picture the hardware decoded, not a stand-in");
             assert!(r.flags & (ffi::VA_PICTURE_H264_SHORT_TERM_REFERENCE | ffi::VA_PICTURE_H264_LONG_TERM_REFERENCE) != 0, "reference flags");
         }
         assert!(!slices.is_empty());
@@ -144,6 +146,10 @@ impl Accel for Recorder {
         self.decoded[index] = true;
         self.filled[index] = true;
         Ok(())
+    }
+
+    fn decoded_refs_only(&self) -> bool {
+        self.strict
     }
 }
 
@@ -183,9 +189,16 @@ fn read_stream(path: &std::path::Path) -> Stream {
 }
 
 fn front(s: &Stream) -> Front<Recorder> {
+    front_with(s, true)
+}
+
+/// A front end over a recorder that is (`strict`) or is not held to decoded references.
+fn front_with(s: &Stream, strict: bool) -> Front<Recorder> {
     let info = NalStreamInfo::from_entry(&s.entry).unwrap().unwrap();
     let mbs = (info.coded.0 / 16, info.coded.1 / 16);
-    Front::new(Recorder::new(18), info.length_size, mbs, &info.parameter_sets).unwrap()
+    let mut r = Recorder::new(18);
+    r.strict = strict;
+    Front::new(r, info.length_size, mbs, &info.parameter_sets).unwrap()
 }
 
 fn pts(frames: &[DecodedFrame]) -> Vec<i64> {
@@ -262,6 +275,32 @@ fn a_picture_predicted_from_a_frame_num_gap_is_unsupported() {
     let err = err.to_string();
     assert!(err.contains("a picture predicted from a frame_num gap"), "{err}");
     assert_eq!(f.accel().pictures, 2, "nothing submitted with a stand-in reference");
+}
+
+/// A driver that takes stand-in references (not radeonsi) keeps the old behaviour: the picture
+/// after a frame_num gap is decoded in hardware, its gap reference listed as before.
+#[test]
+fn a_driver_that_takes_stand_ins_decodes_past_a_frame_num_gap_in_hardware() {
+    let ff = filmcraft_testkit::require_ffmpeg!();
+    let (name, profile, params) = STREAMS[1];
+    let Some(path) = fixture(&ff, name, profile, params) else { return };
+    let s = read_stream(&path);
+    let mut f = front_with(&s, false);
+    for (smp, p) in &s.samples[..2] {
+        f.decode(smp, *p).unwrap();
+    }
+    let (smp, p) = &s.samples[3];
+    f.decode(smp, *p).unwrap_or_else(|e| panic!("{name}: the picture after the gap went to software: {e}"));
+    assert_eq!(f.accel().pictures, 3, "the picture after the gap was handed to the hardware");
+}
+
+#[test]
+fn only_radeonsi_is_held_to_decoded_references() {
+    use super::radeonsi;
+    assert!(radeonsi("Mesa Gallium driver 26.1.0 for AMD Radeon 8060S Graphics (radeonsi, gfx1151, ACO, DRM 3.64)"));
+    assert!(!radeonsi("Intel iHD driver for Intel(R) Gen Graphics - 25.2.0"));
+    assert!(!radeonsi("Mesa Gallium driver 26.1.0 for NV138 (nouveau)"));
+    assert!(!radeonsi("Splitted-Desktop Systems VDPAU backend for VA-API"));
 }
 
 /// Damaged samples give errors (the hybrid decoder then continues in software), never a panic.
