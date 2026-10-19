@@ -378,12 +378,13 @@ pub fn answer_now() -> Answer {
     }
 }
 
-/// Sizes the main window for the screen it opens on (see the module). Asks the compositor on the
-/// first call only and logs the decision once; `main` builds the options again for each graphics
-/// retry and gets the same answer.
+/// What [`apply`] decided (asked once), for [`watch`].
 #[cfg(target_os = "linux")]
 static DECISION: std::sync::OnceLock<Decision> = std::sync::OnceLock::new();
 
+/// Sizes the main window for the screen it opens on (see the module). Asks the compositor on the
+/// first call only and logs the decision once; `main` builds the options again for each graphics
+/// retry and gets the same answer.
 pub fn apply(viewport: &mut egui::ViewportBuilder) {
     #[cfg(target_os = "linux")]
     {
