@@ -610,7 +610,8 @@ const SAME_CUT_SLACK: Tick = Tick(filmcraft_time::TICKS_PER_SECOND);
 pub fn relink_suggest(s: &Session, p: &Value) -> Result<Value> {
     let folder = str_p(p, "folder").ok_or_else(|| bad("media.relinkSuggest", "need `folder`"))?;
     let only = u64_p(p, "item");
-    let missing: Vec<Missing> = scan(&s.project, &s.media, &*s.services).into_iter().filter(|m| m.status == "missing" && only.is_none_or(|i| i == m.item)).collect();
+    let missing: Vec<Missing> =
+        scan(&s.project, &s.media, &*s.services).into_iter().filter(|m| m.status == "missing" && only.is_none_or(|i| i == m.item)).collect();
     // the folder's video files by show word, season and episode
     let mut episodes: BTreeMap<(String, u32, u32), Vec<PathBuf>> = BTreeMap::new();
     for (name, paths) in index_folder(Path::new(folder), 20_000) {
