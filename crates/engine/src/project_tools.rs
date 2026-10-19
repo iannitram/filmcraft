@@ -957,7 +957,13 @@ pub fn scratch_paths(s: &Session) -> Value {
     let same = |o: &Option<String>| o.clone().or(project_dir.clone()).unwrap_or_else(|| "(data directory until the project is saved)".into());
     let auto_save = match s.path.as_deref() {
         Some(p) => trusted_scratch(sc.auto_save.as_deref(), Some(p), &s.prefs.auto_save.scratch_folders)
-            .unwrap_or_else(|| filmcraft_format::autosave::auto_save_dir(std::path::Path::new(p)))
+            .or_else(|| default_auto_save_dir(p))
+            .unwrap_or_else(|| {
+                s.persistence.as_ref().map_or_else(
+                    || std::path::PathBuf::from(filmcraft_format::autosave::AUTO_SAVE_DIR),
+                    |per| per.data_dir.join(filmcraft_format::autosave::AUTO_SAVE_DIR),
+                )
+            })
             .to_string_lossy()
             .to_string(),
         None => same(&None),
@@ -1006,6 +1012,16 @@ pub fn trusted_scratch(dir: Option<&str>, project_path: Option<&str>, chosen: &[
     let project = std::path::absolute(project_path?).ok()?;
     let root = project.parent().filter(|r| !r.as_os_str().is_empty())?;
     inside(&resolved, root).then_some(resolved)
+}
+
+/// The project's own Auto-Save folder (`<project folder>/Auto-Save`) when it really lies inside
+/// the project folder. A link that leads elsewhere is refused like an untrusted scratch folder, so
+/// auto-save never writes or rotates (deletes) files outside the project (FX4).
+pub fn default_auto_save_dir(project_path: &str) -> Option<std::path::PathBuf> {
+    let project = std::path::absolute(project_path).ok()?;
+    let root = project.parent().filter(|r| !r.as_os_str().is_empty())?;
+    let dir = filmcraft_format::autosave::auto_save_dir(&project);
+    inside(&dir, root).then_some(dir)
 }
 
 /// Whether `dir` lies inside `root`, also after following the links in the part that exists.
