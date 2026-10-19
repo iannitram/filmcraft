@@ -1925,6 +1925,7 @@ name = "filmcraft-engine"
 version = "0.9.0"
 dependencies = [
  "craft-docpath",
+ "craft-log",
  "filmcraft-audio-dsp",
  "filmcraft-captions",
  "filmcraft-codecs",
