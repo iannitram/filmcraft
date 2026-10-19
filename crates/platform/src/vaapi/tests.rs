@@ -29,13 +29,23 @@ struct Recorder {
     frame: VideoFrame,
     /// [`Accel::decoded_refs_only`]: true like radeonsi, false like a driver that takes stand-ins.
     strict: bool,
+    /// For each [`Accel::read`], in order: whether that surface held a stand-in.
+    reads: Vec<bool>,
 }
 
 impl Recorder {
     fn new(count: usize) -> Self {
         let g = Geometry { crop: (0, 0, 2, 2), bits: 8, color: Default::default(), par: (1, 1) };
         let frame = biplanar::to_frame(&Biplanar { luma: &[128; 4], chroma: &[128; 2], stride: 2, rows: 2 }, &g).unwrap();
-        Self { ids: (0..count as u32).map(|i| 0x100 + i).collect(), decoded: vec![false; count], filled: vec![false; count], pictures: 0, frame, strict: true }
+        Self {
+            ids: (0..count as u32).map(|i| 0x100 + i).collect(),
+            decoded: vec![false; count],
+            filled: vec![false; count],
+            pictures: 0,
+            frame,
+            strict: true,
+            reads: Vec::new(),
+        }
     }
 }
 
@@ -138,6 +148,7 @@ impl Accel for Recorder {
 
     fn read(&mut self, index: usize) -> Result<VideoFrame, String> {
         assert!(self.decoded[index], "read back a decoded surface");
+        self.reads.push(self.filled[index]);
         Ok(self.frame.clone())
     }
 
@@ -275,6 +286,38 @@ fn a_picture_predicted_from_a_frame_num_gap_is_unsupported() {
     let err = err.to_string();
     assert!(err.contains("a picture predicted from a frame_num gap"), "{err}");
     assert_eq!(f.accel().pictures, 2, "nothing submitted with a stand-in reference");
+}
+
+/// A picture the front end concealed (filled from another picture
+/// or grey, never decoded) is emitted as inexact (`draft`), so the frame cache never serves it to
+/// an exact request; a decoded picture stays exact.
+#[test]
+fn a_concealed_picture_is_emitted_as_inexact() {
+    let ff = filmcraft_testkit::require_ffmpeg!();
+    let (name, profile, params) = STREAMS[2]; // open GOP: leading pictures after a seek
+    let Some(path) = fixture(&ff, name, profile, params) else { return };
+    let s = read_stream(&path);
+    let k = (1..s.samples.len()).find(|&i| s.sync[i]).expect("a second sync sample");
+    let mut f = front(&s);
+    let end = (k + 13).min(s.samples.len());
+    let mut frames = Vec::new();
+    for (smp, p) in &s.samples[k..end] {
+        frames.extend(f.decode(smp, *p).unwrap());
+    }
+    frames.extend(f.flush().unwrap());
+    let reads = f.accel().reads.clone();
+    assert_eq!(reads.len(), frames.len(), "one read per emitted frame");
+    assert!(reads.iter().any(|&filled| filled), "{name}: the seek conceals leading pictures");
+    for (fr, filled) in frames.iter().zip(&reads) {
+        assert_eq!(
+            fr.draft,
+            *filled,
+            "{name}: the frame at {} is {} but emitted with draft = {}",
+            fr.pts,
+            if *filled { "concealed" } else { "decoded" },
+            fr.draft
+        );
+    }
 }
 
 /// A driver that takes stand-in references (not radeonsi) keeps the old behaviour: the picture

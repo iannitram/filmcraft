@@ -165,7 +165,9 @@ impl<A: Accel> Front<A> {
     fn read_out(&mut self, outs: Vec<Output<Surface>>, frames: &mut Vec<DecodedFrame>) -> Result<()> {
         for o in outs {
             let frame = self.accel.read(o.frame.index).map_err(decode_err)?;
-            frames.push(DecodedFrame { pts: o.meta.pts, frame, draft: false });
+            // a stand-in (concealed, never decoded) is not the picture: emitted as inexact, so the
+            // frame cache never serves it to an exact request
+            frames.push(DecodedFrame { pts: o.meta.pts, frame, draft: o.frame.held != Held::Decoded });
         }
         Ok(())
     }
