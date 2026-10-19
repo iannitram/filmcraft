@@ -1020,8 +1020,15 @@ impl Worker {
                 (scratch, p.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| s.project.name.clone()))
             }
             (Some(p), None) => {
-                let p = Path::new(p);
-                (names::auto_save_dir(p), p.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| s.project.name.clone()))
+                let stem = Path::new(p).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| s.project.name.clone());
+                match crate::project_tools::default_auto_save_dir(p) {
+                    Some(dir) => (dir, stem),
+                    // the project's Auto-Save folder leads outside the project (a link): use the app's
+                    None => {
+                        log::warn!("auto-save: {p}'s Auto-Save folder is outside the project folder; using the app's Auto-Save folder");
+                        (self.data_dir.join(names::AUTO_SAVE_DIR), stem)
+                    }
+                }
             }
             (None, _) => (self.data_dir.join(names::AUTO_SAVE_DIR), s.project.name.clone()),
         };

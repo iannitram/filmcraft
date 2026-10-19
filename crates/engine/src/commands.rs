@@ -4449,7 +4449,12 @@ fn auto_save_dir(s: &Session) -> std::path::PathBuf {
         return d;
     }
     match (&s.path, &s.persistence) {
-        (Some(p), _) => filmcraft_format::autosave::auto_save_dir(std::path::Path::new(p)),
+        // the project's Auto-Save folder only when it lies inside the project folder (FX4), as the
+        // worker writes it
+        (Some(p), per) => crate::project_tools::default_auto_save_dir(p).unwrap_or_else(|| match per {
+            Some(per) => per.data_dir.join(filmcraft_format::autosave::AUTO_SAVE_DIR),
+            None => std::path::PathBuf::from(filmcraft_format::autosave::AUTO_SAVE_DIR),
+        }),
         (None, Some(per)) => per.data_dir.join(filmcraft_format::autosave::AUTO_SAVE_DIR),
         (None, None) => std::path::PathBuf::from(filmcraft_format::autosave::AUTO_SAVE_DIR),
     }
