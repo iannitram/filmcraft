@@ -28,7 +28,11 @@ fn parent_dir(path: &Path) -> PathBuf {
 /// `fsync` the directory so the rename itself survives a power cut. If anything fails the temp file
 /// is removed and `path` is untouched.
 pub fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
-    let tmp = temp_path(path);
+    write_via(path, data, &temp_path(path))
+}
+
+fn write_via(path: &Path, data: &[u8], tmp: &Path) -> io::Result<()> {
+    let tmp = tmp.to_path_buf();
     let r = (|| {
         {
             // closed before the rename
@@ -96,6 +100,21 @@ mod tests {
     fn missing_directory_is_an_error() {
         let d = tmpdir("missing");
         assert!(atomic_write(&d.join("nope/a.fcproj"), b"x").is_err());
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn a_temp_name_collision_leaves_the_other_writers_file() {
+        // FX11: create_new failing on an existing temp file must not delete it (it is another
+        // writer's, mid-save).
+        let d = tmpdir("collision");
+        let p = d.join("a.fcproj");
+        let tmp = d.join(".a.fcproj.other.tmp");
+        fs::write(&tmp, b"another save in progress").unwrap();
+        let e = write_via(&p, b"mine", &tmp).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&tmp).unwrap(), b"another save in progress", "the other writer's temp file was deleted");
+        assert!(!p.exists());
         fs::remove_dir_all(&d).unwrap();
     }
 }
