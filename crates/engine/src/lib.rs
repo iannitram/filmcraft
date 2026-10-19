@@ -1329,6 +1329,8 @@ mod vfx_tests;
 mod voiceover_tests;
 
 #[cfg(test)]
+mod save_recovery_tests;
+#[cfg(test)]
 mod source_placement_tests;
 
 #[cfg(test)]

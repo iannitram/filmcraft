@@ -540,6 +540,15 @@ pub struct JournalMeta {
     pub bytes: usize,
     /// True when the app was closed normally while changes were unsaved (no crash).
     pub clean_exit: bool,
+    /// FNV-1a of the snapshot this metadata describes. The snapshot and this file are replaced one
+    /// after the other: after a crash between the two, a snapshot that doesn't match keeps no
+    /// project path, so recovering it can't overwrite another project's file (FX-S1).
+    pub snapshot_hash: Option<u64>,
+}
+
+/// FNV-1a 64 of a journal snapshot (stable across builds and platforms).
+pub(crate) fn snapshot_hash(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3))
 }
 
 /// Unsaved changes left behind by a session that is no longer running.
@@ -592,7 +601,14 @@ pub fn scan_candidates(data_dir: &Path, skip: Option<&Path>) -> Vec<RecoveryCand
         }
         // Keep the snapshot even when session.json is missing or unreadable: the project
         // is still recoverable. Meta fields fall back to defaults.
-        let meta = fs::read(dir.join(META)).ok().and_then(|b| serde_json::from_slice::<JournalMeta>(&b).ok()).unwrap_or_default();
+        let mut meta = fs::read(dir.join(META)).ok().and_then(|b| serde_json::from_slice::<JournalMeta>(&b).ok()).unwrap_or_default();
+        if let Some(h) = meta.snapshot_hash
+            && fs::read(&snap).map(|b| snapshot_hash(&b)).ok() != Some(h)
+        {
+            // The metadata belongs to another snapshot (a crash between the two writes): the
+            // project is still offered, but not tied to that snapshot's file.
+            meta.project_path = None;
+        }
         out.push(RecoveryCandidate { id: e.file_name().to_string_lossy().into_owned(), dir, meta });
     }
     out.sort_by(|a, b| b.meta.saved_unix.cmp(&a.meta.saved_unix).then(b.id.cmp(&a.id)));
@@ -648,8 +664,24 @@ enum Msg {
     Clean,
     Prefs(AutoSavePrefs),
     AutoSaveNow(Sender<Result<PathBuf, String>>),
-    Flush(Sender<()>),
+    /// Write any pending journal; the reply is the revision the journal then holds (0 = none).
+    Flush(Sender<u64>),
     Stop,
+}
+
+/// The project file's last write. Save (on the UI thread) and the auto-save's "also save the current
+/// project" (on the worker) both write the project file under this lock, so an older revision
+/// never replaces a newer one (FX2).
+#[derive(Debug, Default)]
+pub(crate) struct ProjectWrites {
+    pub(crate) path: Option<String>,
+    pub(crate) revision: u64,
+}
+
+pub(crate) type ProjectGate = Arc<std::sync::Mutex<ProjectWrites>>;
+
+pub(crate) fn lock_gate(g: &ProjectGate) -> std::sync::MutexGuard<'_, ProjectWrites> {
+    g.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Worker → session notifications.
@@ -703,6 +735,7 @@ pub struct Persistence {
     pub candidates: Vec<RecoveryCandidate>,
     pub status: Status,
     pub(crate) last_sent: Option<Sent>,
+    pub(crate) gate: ProjectGate,
     lock: Option<File>,
     tx: Sender<Msg>,
     events: Receiver<WorkerEvent>,
@@ -728,7 +761,9 @@ impl Persistence {
         let candidates = scan_candidates(&cfg.data_dir, Some(&session_dir));
         let (tx, rx) = channel();
         let (etx, events) = channel();
+        let gate = ProjectGate::default();
         let mut w = Worker {
+            gate: gate.clone(),
             data_dir: cfg.data_dir.clone(),
             session_dir: session_dir.clone(),
             local_offset: cfg.local_offset,
@@ -752,6 +787,7 @@ impl Persistence {
             candidates,
             status: Status::default(),
             last_sent: None,
+            gate,
             lock: Some(lock),
             tx,
             events,
@@ -771,12 +807,13 @@ impl Persistence {
         let _ = self.tx.send(Msg::Prefs(p));
     }
 
-    /// Write any pending journal now and wait for it.
-    pub fn flush(&self) {
+    /// Write any pending journal now and wait for it. Returns the revision the journal holds
+    /// afterwards (0 = none: journalling off, or the write failed), or None when the worker did not
+    /// answer (stopped, or still busy after 30 s).
+    pub fn flush(&self) -> Option<u64> {
         let (tx, rx) = channel();
-        if self.tx.send(Msg::Flush(tx)).is_ok() {
-            let _ = rx.recv_timeout(Duration::from_secs(30));
-        }
+        self.tx.send(Msg::Flush(tx)).ok()?;
+        rx.recv_timeout(Duration::from_secs(30)).ok()
     }
 
     /// Write an auto-save now (if there are unsaved changes) and wait for the result.
@@ -888,6 +925,7 @@ struct Worker {
     last_change: Instant,
     next_autosave: Instant,
     meta: JournalMeta,
+    gate: ProjectGate,
 }
 
 impl Worker {
@@ -949,7 +987,7 @@ impl Worker {
                     if self.journal_due().is_some() {
                         self.write_journal();
                     }
-                    let _ = ack.send(());
+                    let _ = ack.send(self.journaled);
                 }
                 Some(Msg::Stop) => return,
                 None => {}
@@ -985,6 +1023,7 @@ impl Worker {
         meta.project_name = s.project.name.clone();
         meta.project_path = s.path.clone();
         meta.bytes = bytes.len();
+        meta.snapshot_hash = Some(snapshot_hash(&bytes));
         // Snapshot first, then the meta that makes it a candidate.
         let r = filmcraft_format::atomic_write(&self.session_dir.join(SNAPSHOT), &bytes)
             .and_then(|_| filmcraft_format::atomic_write(&self.session_dir.join(META), &serde_json::to_vec_pretty(&meta).unwrap_or_default()));
@@ -1039,11 +1078,17 @@ impl Worker {
                 if self.prefs.save_current_project
                     && let Some(p) = &s.path
                 {
-                    match filmcraft_format::atomic_write(Path::new(p), &bytes) {
-                        Ok(()) => {
-                            let _ = self.events.send(WorkerEvent::SavedProject { path: p.clone(), revision: s.revision });
+                    let mut g = lock_gate(&self.gate);
+                    // a newer Save already wrote this file: this snapshot is older
+                    if g.path.as_deref() != Some(p.as_str()) || g.revision < s.revision {
+                        match filmcraft_format::atomic_write(Path::new(p), &bytes) {
+                            Ok(()) => {
+                                g.path = Some(p.clone());
+                                g.revision = s.revision;
+                                let _ = self.events.send(WorkerEvent::SavedProject { path: p.clone(), revision: s.revision });
+                            }
+                            Err(e) => self.error(format!("saving {p}: {e}")),
                         }
-                        Err(e) => self.error(format!("saving {p}: {e}")),
                     }
                 }
                 Ok(path)
