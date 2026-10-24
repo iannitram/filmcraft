@@ -1017,16 +1017,12 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=82a24b006eefa036b43c09a67fb9a3fbd17ffe63#82a24b006eefa036b43c09a67fb9a3fbd17ffe63"
 
 [[package]]
-name = "craft-log"
+name = "craft-media"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=f0ad6c1e1d297908915f4be315b0fcfc9be7b5d4#f0ad6c1e1d297908915f4be315b0fcfc9be7b5d4"
 dependencies = [
- "craft-stage",
- "log",
+ "thiserror 2.0.21",
 ]
-
-[[package]]
-name = "craft-stage"
-version = "0.1.0"
 
 [[package]]
 name = "craft-ui"
@@ -1696,7 +1692,6 @@ dependencies = [
  "arboard",
  "chrono",
  "cpal",
- "craft-log",
  "eframe",
  "egui",
  "filmcraft-engine",
@@ -1719,8 +1714,6 @@ dependencies = [
  "serde_json",
  "subtle",
  "sys-locale",
- "wayland-client",
- "wayland-protocols",
  "winit",
  "winresource",
  "zbus",
@@ -1773,6 +1766,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
 ]
@@ -1799,7 +1793,7 @@ dependencies = [
 name = "filmcraft-bitstream"
 version = "0.12.0"
 dependencies = [
- "proptest",
+ "craft-media",
 ]
 
 [[package]]
@@ -1823,7 +1817,6 @@ version = "0.12.0"
 name = "filmcraft-cli"
 version = "0.12.0"
 dependencies = [
- "craft-log",
  "filmcraft-automation",
  "filmcraft-codecs",
  "filmcraft-engine",
@@ -1840,7 +1833,6 @@ dependencies = [
  "filmcraft-time",
  "serde_json",
  "tokio",
- "wgpu",
 ]
 
 [[package]]
@@ -1925,8 +1917,8 @@ dependencies = [
 name = "filmcraft-engine"
 version = "0.12.0"
 dependencies = [
+ "chrono",
  "craft-docpath",
- "craft-log",
  "filmcraft-audio-dsp",
  "filmcraft-captions",
  "filmcraft-codecs",
@@ -1951,7 +1943,6 @@ dependencies = [
  "filmcraft-tts",
  "image",
  "log",
- "rayon",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -1962,7 +1953,6 @@ dependencies = [
 name = "filmcraft-export"
 version = "0.12.0"
 dependencies = [
- "craft-log",
  "filmcraft-aac",
  "filmcraft-apv",
  "filmcraft-audio-dsp",
@@ -1983,7 +1973,6 @@ dependencies = [
  "filmcraft-text",
  "filmcraft-time",
  "image",
- "log",
  "rayon",
  "serde",
  "serde_json",
@@ -2004,6 +1993,7 @@ dependencies = [
 name = "filmcraft-format"
 version = "0.12.0"
 dependencies = [
+ "chrono",
  "filmcraft-media",
  "filmcraft-project",
  "filmcraft-time",
@@ -2108,7 +2098,6 @@ dependencies = [
  "filmcraft-media",
  "filmcraft-project",
  "filmcraft-time",
- "flate2",
  "proptest",
  "roxmltree",
  "serde",
@@ -2120,17 +2109,17 @@ dependencies = [
 name = "filmcraft-isobmff"
 version = "0.12.0"
 dependencies = [
- "filmcraft-bitstream",
+ "craft-media",
  "filmcraft-testkit",
  "proptest",
  "serde_json",
- "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "filmcraft-matroska"
 version = "0.12.0"
 dependencies = [
+ "craft-media",
  "filmcraft-testkit",
  "serde_json",
 ]
@@ -2181,6 +2170,7 @@ dependencies = [
 name = "filmcraft-mxf"
 version = "0.12.0"
 dependencies = [
+ "chrono",
  "filmcraft-testkit",
 ]
 
@@ -2202,7 +2192,6 @@ dependencies = [
 name = "filmcraft-platform"
 version = "0.12.0"
 dependencies = [
- "craft-log",
  "filmcraft-bitstream",
  "filmcraft-codecs",
  "filmcraft-color",
@@ -2292,6 +2281,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "thiserror 2.0.21",
  "ureq",
 ]
@@ -2300,7 +2290,9 @@ dependencies = [
 name = "filmcraft-testkit"
 version = "0.12.0"
 dependencies = [
+ "chrono",
  "png",
+ "tempfile",
 ]
 
 [[package]]
@@ -2310,6 +2302,7 @@ dependencies = [
  "filmcraft-color",
  "harfrust",
  "skrifa",
+ "tempfile",
  "unicode-bidi",
  "unicode-linebreak",
  "unicode-segmentation",
@@ -2333,6 +2326,7 @@ dependencies = [
  "filmcraft-tts-text",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.21",
  "zip",
 ]
@@ -2379,6 +2373,7 @@ dependencies = [
  "rustix 1.1.5",
  "serde",
  "serde_json",
+ "tempfile",
  "toml 1.1.6+spec-1.1.0",
  "unicode-bidi",
  "web-time",
