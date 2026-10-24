@@ -1025,6 +1025,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-media"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=f0ad6c1e1d297908915f4be315b0fcfc9be7b5d4#f0ad6c1e1d297908915f4be315b0fcfc9be7b5d4"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-stage"
 version = "0.1.0"
 
@@ -1773,6 +1781,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
 ]
@@ -1799,7 +1808,7 @@ dependencies = [
 name = "filmcraft-bitstream"
 version = "0.12.0"
 dependencies = [
- "proptest",
+ "craft-media",
 ]
 
 [[package]]
@@ -1925,6 +1934,7 @@ dependencies = [
 name = "filmcraft-engine"
 version = "0.12.0"
 dependencies = [
+ "chrono",
  "craft-docpath",
  "craft-log",
  "filmcraft-audio-dsp",
@@ -2004,6 +2014,7 @@ dependencies = [
 name = "filmcraft-format"
 version = "0.12.0"
 dependencies = [
+ "chrono",
  "filmcraft-media",
  "filmcraft-project",
  "filmcraft-time",
@@ -2120,17 +2131,17 @@ dependencies = [
 name = "filmcraft-isobmff"
 version = "0.12.0"
 dependencies = [
- "filmcraft-bitstream",
+ "craft-media",
  "filmcraft-testkit",
  "proptest",
  "serde_json",
- "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "filmcraft-matroska"
 version = "0.12.0"
 dependencies = [
+ "craft-media",
  "filmcraft-testkit",
  "serde_json",
 ]
@@ -2181,6 +2192,7 @@ dependencies = [
 name = "filmcraft-mxf"
 version = "0.12.0"
 dependencies = [
+ "chrono",
  "filmcraft-testkit",
 ]
 
@@ -2292,6 +2304,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "thiserror 2.0.21",
  "ureq",
 ]
@@ -2300,7 +2313,9 @@ dependencies = [
 name = "filmcraft-testkit"
 version = "0.12.0"
 dependencies = [
+ "chrono",
  "png",
+ "tempfile",
 ]
 
 [[package]]
@@ -2310,6 +2325,7 @@ dependencies = [
  "filmcraft-color",
  "harfrust",
  "skrifa",
+ "tempfile",
  "unicode-bidi",
  "unicode-linebreak",
  "unicode-segmentation",
@@ -2333,6 +2349,7 @@ dependencies = [
  "filmcraft-tts-text",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.21",
  "zip",
 ]
@@ -2379,6 +2396,7 @@ dependencies = [
  "rustix 1.1.5",
  "serde",
  "serde_json",
+ "tempfile",
  "toml 1.1.6+spec-1.1.0",
  "unicode-bidi",
  "web-time",
