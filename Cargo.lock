@@ -1017,12 +1017,24 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=82a24b006eefa036b43c09a67fb9a3fbd17ffe63#82a24b006eefa036b43c09a67fb9a3fbd17ffe63"
 
 [[package]]
+name = "craft-log"
+version = "0.1.0"
+dependencies = [
+ "craft-stage",
+ "log",
+]
+
+[[package]]
 name = "craft-media"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=f0ad6c1e1d297908915f4be315b0fcfc9be7b5d4#f0ad6c1e1d297908915f4be315b0fcfc9be7b5d4"
 dependencies = [
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "craft-stage"
+version = "0.1.0"
 
 [[package]]
 name = "craft-ui"
@@ -1692,6 +1704,7 @@ dependencies = [
  "arboard",
  "chrono",
  "cpal",
+ "craft-log",
  "eframe",
  "egui",
  "filmcraft-engine",
@@ -1714,6 +1727,8 @@ dependencies = [
  "serde_json",
  "subtle",
  "sys-locale",
+ "wayland-client",
+ "wayland-protocols",
  "winit",
  "winresource",
  "zbus",
@@ -1817,6 +1832,7 @@ version = "0.12.0"
 name = "filmcraft-cli"
 version = "0.12.0"
 dependencies = [
+ "craft-log",
  "filmcraft-automation",
  "filmcraft-codecs",
  "filmcraft-engine",
@@ -1833,6 +1849,7 @@ dependencies = [
  "filmcraft-time",
  "serde_json",
  "tokio",
+ "wgpu",
 ]
 
 [[package]]
@@ -1919,6 +1936,7 @@ version = "0.12.0"
 dependencies = [
  "chrono",
  "craft-docpath",
+ "craft-log",
  "filmcraft-audio-dsp",
  "filmcraft-captions",
  "filmcraft-codecs",
@@ -1943,6 +1961,7 @@ dependencies = [
  "filmcraft-tts",
  "image",
  "log",
+ "rayon",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -1953,6 +1972,7 @@ dependencies = [
 name = "filmcraft-export"
 version = "0.12.0"
 dependencies = [
+ "craft-log",
  "filmcraft-aac",
  "filmcraft-apv",
  "filmcraft-audio-dsp",
@@ -1973,6 +1993,7 @@ dependencies = [
  "filmcraft-text",
  "filmcraft-time",
  "image",
+ "log",
  "rayon",
  "serde",
  "serde_json",
@@ -2098,6 +2119,7 @@ dependencies = [
  "filmcraft-media",
  "filmcraft-project",
  "filmcraft-time",
+ "flate2",
  "proptest",
  "roxmltree",
  "serde",
@@ -2192,6 +2214,7 @@ dependencies = [
 name = "filmcraft-platform"
 version = "0.12.0"
 dependencies = [
+ "craft-log",
  "filmcraft-bitstream",
  "filmcraft-codecs",
  "filmcraft-color",
