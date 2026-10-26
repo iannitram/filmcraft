@@ -25,6 +25,7 @@ pub mod graphics;
 pub mod interchange;
 pub mod keyboard;
 mod keyframe_move;
+pub mod live_link; // ours
 mod marker_export;
 pub mod masks;
 pub mod media_anchor; // ours
@@ -503,6 +504,10 @@ pub struct Session {
     pub media_stamps: std::collections::HashMap<String, media_watch::Stamp>,
     /// The stamps being taken on a worker thread ([`Session::start_media_scan`]).
     pub media_scan: Option<media_watch::MediaScan>,
+    /// Ours: EffectCraft renders running on a worker thread ([`Session::start_link_check`]).
+    pub link_check: Option<live_link::LinkCheck>,
+    /// Ours: the EffectCraft copies started for live links, by .ecproj (no second copy).
+    pub link_editors: std::collections::HashMap<String, std::process::Child>,
 }
 
 /// An export advanced a batch at a time on the host's thread ([`Session::pump_jobs`]).
@@ -596,6 +601,8 @@ impl Session {
             exec_depth: 0,
             media_stamps: Default::default(),
             media_scan: None,
+            link_check: None,
+            link_editors: Default::default(),
         }
     }
 

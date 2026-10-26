@@ -163,7 +163,9 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
         // ---------------- Edit ----------------
         spec("edit.find", "Find…", &["Edit"], Some("Cmd+F"), FIND_PARAMS, always, find),
         spec("edit.findNext", "Find Next", &["Edit"], None, "{}", has_find, find_next),
-        spec("edit.editOriginal", "Edit Original", &["Edit"], Some("Cmd+E"), r#"{"items":[id]?}"#, has_original, edit_original),
+        spec("edit.editOriginal", "Edit Original", &["Edit"], Some("Cmd+E"), r#"{"items":[id]?}"#, has_original, |s, p| {
+            crate::live_link::edit_original_or_open(s, p, edit_original)
+        }), // ours: linked comps
         // Project panel context menu (not in the File menu): reveal the clip's media file.
         query("file.reveal", "Reveal in Finder", &[], None, r#"{"items":[id]?}"#, has_file_selection, edit_original),
         // ---------------- Clip ----------------
@@ -372,6 +374,11 @@ fn targets(s: &Session, p: &Value) -> Vec<ItemId> {
 }
 
 /// The media clip behind an item (subclips resolve to their parent).
+/// Ours (live links): the media items the selection or `items` names.
+pub(crate) fn target_items(s: &Session, p: &Value) -> Vec<ItemId> {
+    targets(s, p).into_iter().filter_map(|id| media_of(&s.project, id).map(|(root, _)| root)).collect()
+}
+
 fn media_of(p: &Project, id: ItemId) -> Option<(ItemId, &filmcraft_project::MediaClip)> {
     p.resolve_media(id).map(|(root, media, _)| (root, media))
 }

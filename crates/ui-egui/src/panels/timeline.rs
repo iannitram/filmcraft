@@ -3011,6 +3011,18 @@ fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layout: &
         }
     }
 
+    // ---- ours (live links): double-click a clip of a linked EffectCraft comp opens it in EffectCraft
+    let linked = resp.double_clicked() && tool == Tool::Selection;
+    let linked = linked
+        .then(|| resp.interact_pointer_pos())
+        .flatten()
+        .and_then(|p| if let Hit::Clip { clip, edge: None, .. } = hit(seq, layout, p) { seq.find_item(clip).map(|(_, it)| it.item) } else { None })
+        .filter(|item| filmcraft_engine::live_link::link_of(&app.session.project, *item).is_some());
+    if let Some(item) = linked {
+        if let Err(e) = app.session.execute("link.openInEffectCraft", json!({"item": item.0})) {
+            app.ui.status = e.to_string();
+        }
+    } else
     // ---- double-click any other clip (not on its edge): open its media in the Source monitor at
     // the matching frame (Premiere); graphic clips have no source to show
     if resp.double_clicked()

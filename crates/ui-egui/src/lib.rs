@@ -2166,6 +2166,7 @@ impl FilmcraftApp {
     /// ([`filmcraft_engine::media_watch`]).
     #[cfg(not(target_arch = "wasm32"))]
     fn tick_media_refresh(&mut self, ctx: &egui::Context, now: f64) {
+        let _ = self.session.poll_link_check(); // ours: EffectCraft live links (it toasts and logs)
         if let Some(r) = self.session.poll_media_scan() {
             match r {
                 Ok(r) => {
@@ -2189,8 +2190,9 @@ impl FilmcraftApp {
         if now - last >= every || (focused && !was_focused) {
             ctx.data_mut(|d| d.insert_temp(last_key, now));
             self.session.start_media_scan();
+            self.session.start_link_check(); // ours
         }
-        let wait = if self.session.media_scan.is_some() { 0.1 } else { (every - (now - last)).clamp(0.1, every) };
+        let wait = if self.session.media_scan.is_some() || self.session.link_check.is_some() { 0.1 } else { (every - (now - last)).clamp(0.1, every) };
         ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait));
     }
 

@@ -1235,6 +1235,7 @@ static CATEGORIES: &[Category] = &[
             ),
             b("media.hardwareDecoding", "Enable hardware accelerated decoding (requires restart)", false),
             b("media.proresHardwareEncoding", "Enable ProRes hardware accelerated encoding, if available", false),
+            f("media.effectcraftCli", "EffectCraft command line (live links; empty: found by itself)", Kind::Path, true), // ours
         ],
     },
     Category {
