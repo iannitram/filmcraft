@@ -53,7 +53,7 @@ pub fn depth_from_env() -> usize {
 /// depth 1 gives, only later.
 pub(crate) struct InFlight {
     depth: usize,
-    queue: VecDeque<(usize, i64)>,
+    queue: VecDeque<(usize, i64, bool)>,
 }
 
 impl InFlight {
@@ -63,15 +63,15 @@ impl InFlight {
 
     /// Whether surface `index` holds a picture not read back yet.
     pub(crate) fn holds(&self, index: usize) -> bool {
-        self.queue.iter().any(|&(i, _)| i == index)
+        self.queue.iter().any(|&(i, _, _)| i == index)
     }
 
-    /// Queue `outs` (surface, pts) in output order, then read back all but the newest
+    /// Queue `outs` (surface, pts, draft) in output order, then read back all but the newest
     /// `depth - 1`.
     pub(crate) fn output<A: Accel>(
         &mut self,
         accel: &mut A,
-        outs: impl IntoIterator<Item = (usize, i64)>,
+        outs: impl IntoIterator<Item = (usize, i64, bool)>,
         frames: &mut Vec<DecodedFrame>,
     ) -> Result<(), CodecError> {
         self.queue.extend(outs);
@@ -81,9 +81,9 @@ impl InFlight {
     /// Read back the oldest pictures until `keep` are left.
     pub(crate) fn drain<A: Accel>(&mut self, accel: &mut A, keep: usize, frames: &mut Vec<DecodedFrame>) -> Result<(), CodecError> {
         while self.queue.len() > keep {
-            let Some((index, pts)) = self.queue.pop_front() else { break };
+            let Some((index, pts, draft)) = self.queue.pop_front() else { break };
             let frame = accel.read(index).map_err(CodecError::Decode)?;
-            frames.push(DecodedFrame { pts, frame, draft: false });
+            frames.push(DecodedFrame { pts, frame, draft });
         }
         Ok(())
     }
@@ -123,6 +123,20 @@ pub trait Accel: Send {
     /// when `None`: the stand-ins for reference pictures that were never decoded, as the software
     /// decoders make them.
     fn fill(&mut self, index: usize, from: Option<usize>) -> std::result::Result<(), String>;
+    /// Whether the driver decodes only from reference pictures it decoded itself, so no stand-in
+    /// ([`Accel::fill`]) may be handed to it as a reference (Mesa radeonsi with VCN dynamic DPB).
+    /// Elsewhere stand-ins are listed as references, as before, and a picture predicted from a
+    /// frame_num gap still decodes in hardware.
+    fn decoded_refs_only(&self) -> bool {
+        true
+    }
+}
+
+/// Mesa's radeonsi VA-API driver, by its vendor string ("Mesa Gallium driver 26.1.0 for AMD Radeon
+/// 8060S Graphics (radeonsi, gfx1151, …)").
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // used by the Linux session and the tests
+pub(crate) fn radeonsi(vendor: &str) -> bool {
+    vendor.contains("radeonsi")
 }
 
 #[cfg(target_os = "linux")]

@@ -7,9 +7,10 @@
 //! them to an [`Accel`] (the libva session on Linux, a recording stand-in in tests), then reads
 //! back the pictures the DPB outputs. What the hardware path does not take is an error, so the
 //! hybrid decoder replays the run in software: field / MBAFF coding, FMO, SP / SI and data
-//! partitioning, stream changes the surfaces were not made for, pictures predicted from a
-//! frame_num gap. After a start at a non-IDR picture (an open-GOP seek) the leading pictures,
-//! predicted from frames before the start, are concealed ([`Held::Missing`]).
+//! partitioning, stream changes the surfaces were not made for, and on a driver held to decoded
+//! references ([`Accel::decoded_refs_only`], Mesa radeonsi) pictures predicted from a frame_num gap.
+//! There, after a start at a non-IDR picture (an open-GOP seek), the leading pictures, predicted
+//! from frames before the start, are concealed ([`Held::Missing`]).
 //!
 //! Safe code; compiled on every target so its logic is tested everywhere.
 
@@ -175,7 +176,9 @@ impl<A: Accel> Front<A> {
     /// Read back the pictures the DPB output, right away: a surface leaving the DPB is reused by
     /// the next picture.
     fn read_out(&mut self, outs: Vec<Output<Surface>>, frames: &mut Vec<DecodedFrame>) -> Result<()> {
-        self.in_flight.output(&mut self.accel, outs.into_iter().map(|o| (o.frame.index, o.meta.pts)), frames)
+        // a stand-in (concealed, never decoded) is not the picture: emitted as inexact, so the
+        // frame cache never serves it to an exact request
+        self.in_flight.output(&mut self.accel, outs.into_iter().map(|o| (o.frame.index, o.meta.pts, o.frame.held != Held::Decoded)), frames)
     }
 
     fn handle_nal(&mut self, nal: &[u8], pts: i64, frames: &mut Vec<DecodedFrame>) -> Result<()> {
@@ -257,14 +260,16 @@ impl<A: Accel> Front<A> {
         if lists.iter().flatten().any(|(_, is_ref, _)| !is_ref) {
             return Err(decode_err("a reference picture is missing"));
         }
-        if lists.iter().flatten().any(|(_, _, held)| *held == Held::Gap) {
+        // drivers that take stand-in references (decoded_refs_only false) are given them, as before
+        let strict = self.accel.decoded_refs_only();
+        if strict && lists.iter().flatten().any(|(_, _, held)| *held == Held::Gap) {
             return Err(unsupported("a picture predicted from a frame_num gap"));
         }
-        let conceal = lists.iter().flatten().any(|(_, _, held)| *held == Held::Missing);
+        let conceal = strict && lists.iter().flatten().any(|(_, _, held)| *held == Held::Missing);
         // An inter slice none of whose references the hardware decoded (all concealed stand-ins):
         // the case Mesa's VCN decoder once guarded against (MR 29055, lost in the 26.1 rewrite,
         // back in 26.1.4 with MR 42256) and that can make the video engine fault.
-        if !sh.slice_type.is_intra() && !lists.iter().flatten().any(|(_, _, held)| *held == Held::Decoded) {
+        if strict && !sh.slice_type.is_intra() && !lists.iter().flatten().any(|(_, _, held)| *held == Held::Decoded) {
             log::warn!(
                 "decision: decode: VA-API H.264 {} slice of frame_num {} (POC {}) has no decoded reference: its {} references are all stand-ins",
                 if sh.slice_type.is_b() { "B" } else { "P" },
@@ -374,14 +379,17 @@ impl<A: Accel> Front<A> {
             BottomFieldOrderCnt: p.poc.bottom,
             va_reserved: [0; ffi::VA_PADDING_LOW],
         };
-        // stand-ins are not listed: no picture handed to the hardware is predicted from one, and
-        // leaving out entries no list uses keeps the lists the hardware builds the same
-        let decoded = self.dpb.entries.iter().filter(|e| e.mark != RefMark::Unused && e.frame.held == Held::Decoded);
+        // on a driver held to decoded references (radeonsi) stand-ins are not listed: no picture
+        // handed to it is predicted from one, and leaving out entries no list uses keeps the lists
+        // the hardware builds the same
+        let strict = self.accel.decoded_refs_only();
+        let decoded = self.dpb.entries.iter().filter(|e| e.mark != RefMark::Unused && (e.frame.held == Held::Decoded || !strict));
         for (slot, e) in pic.ReferenceFrames.iter_mut().zip(decoded) {
             *slot = va_ref(e, surfaces);
         }
         let held = if p.conceal {
             let last = self.last_decoded();
+            log::debug!("VA-API H.264: picture at pts {} is predicted from frames before the start of the run (open-GOP leading picture), concealed", p.pts);
             self.accel.fill(p.target, last).map_err(decode_err)?;
             Held::Missing
         } else {

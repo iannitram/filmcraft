@@ -159,7 +159,7 @@ impl<A: Accel> Front<A> {
 
     /// Read back the pictures the DPB output, right away: a surface leaving the DPB is reused.
     fn read_out(&mut self, outs: Vec<Output<Surface>>, frames: &mut Vec<DecodedFrame>) -> Result<()> {
-        self.in_flight.output(&mut self.accel, outs.into_iter().map(|o| (o.frame.index, o.meta.pts)), frames)
+        self.in_flight.output(&mut self.accel, outs.into_iter().map(|o| (o.frame.index, o.meta.pts, false)), frames)
     }
 
     fn handle_nal(&mut self, nal: &[u8], pts: i64, frames: &mut Vec<DecodedFrame>) -> Result<()> {
