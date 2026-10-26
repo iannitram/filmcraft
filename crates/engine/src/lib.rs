@@ -1390,6 +1390,8 @@ mod voiceover_tests;
 mod work_area_tests;
 
 #[cfg(test)]
+mod auto_save_dir_tests;
+#[cfg(test)]
 mod source_placement_tests;
 
 #[cfg(test)]
