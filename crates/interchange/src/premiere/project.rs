@@ -5,10 +5,10 @@ use filmcraft_project::{
     BinId, ItemId, ItemKind, Label, Param, ParamValue, SequenceSettings, TrackKind, Transition, TransitionAlign, TransitionId, find_effect,
 };
 use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick};
-use roxmltree::Node;
+use roxmltree::{Node, NodeId};
 
 use super::effects;
-use super::graph::{Graph, PROJECT, at, decode, error, key, parse, text_at};
+use super::graph::{BinBudget, Graph, PROJECT, at, decode, error, key, parse, text_at};
 use super::legacy_title;
 use super::text;
 use crate::common::{Builder, MediaSpec, empty_sequence, kind_from_ext, rate_from_f64, resolve_path, settings_for};
@@ -16,6 +16,10 @@ use crate::xml::{child_text, elements};
 use crate::{ImportOptions, Imported, Report, Result};
 
 pub fn import_project(bytes: &[u8], opts: &ImportOptions) -> Result<(Imported, Report)> {
+    import_project_with_budget(bytes, opts, BinBudget::default())
+}
+
+fn import_project_with_budget(bytes: &[u8], opts: &ImportOptions, bin_budget: BinBudget) -> Result<(Imported, Report)> {
     let text = decode(bytes, PROJECT)?;
     let doc = parse(&text, PROJECT)?;
     let graph = Graph::new(doc.root_element(), PROJECT, super::graph::Duplicates::KeepFirst)?;
@@ -27,6 +31,8 @@ pub fn import_project(bytes: &[u8], opts: &ImportOptions) -> Result<(Imported, R
         graph,
         opts,
         builder: Builder::new(opts.name.as_deref().unwrap_or("Imported Premiere project")),
+        expanded_bins: HashSet::new(),
+        bin_budget,
         sequences: HashMap::new(),
         leaves: Vec::new(),
         nesting: HashMap::new(),
@@ -84,6 +90,9 @@ struct Importer<'a, 'i, 'o, 'r> {
     graph: Graph<'a, 'i>,
     opts: &'o ImportOptions,
     builder: Builder,
+    /// Bins already imported: a bin listed by several parents is imported once, under the first.
+    expanded_bins: HashSet<NodeId>,
+    bin_budget: BinBudget,
     sequences: HashMap<String, ItemId>,
     leaves: Vec<(Node<'a, 'i>, Option<BinId>)>,
     nesting: HashMap<ItemId, Vec<ItemId>>,
@@ -103,21 +112,32 @@ struct Importer<'a, 'i, 'o, 'r> {
 }
 
 impl<'a, 'i> Importer<'a, 'i, '_, '_> {
-    fn walk_bins(&mut self, node: Node<'a, 'i>, parent: Option<BinId>, root: bool, active: &mut HashSet<String>, depth: usize) -> Result<()> {
-        if depth >= 64 || !active.insert(key(node)) {
+    fn walk_bins(&mut self, node: Node<'a, 'i>, parent: Option<BinId>, root: bool, active: &mut HashSet<NodeId>, depth: usize) -> Result<()> {
+        let id = node.id();
+        if depth >= 64 || active.contains(&id) {
             return Err(error(PROJECT, "cyclic or excessively deep project bins"));
         }
-        let bin = if root { parent } else { Some(self.builder.bin(text_at(node, &["ProjectItem", "Name"]).unwrap_or("Imported bin"), parent)) };
-        for item in self.graph.references(node, &["ProjectItemContainer", "Items"])? {
+        // A shared bin belongs to its first parent: expanding a graph of bins as a tree turned a few
+        // object definitions into millions of bins (FX5). A bin that lists itself still fails above.
+        if self.expanded_bins.contains(&id) {
+            return Ok(());
+        }
+        let name = text_at(node, &["ProjectItem", "Name"]).unwrap_or("Imported bin");
+        self.bin_budget.charge(name)?;
+        self.expanded_bins.insert(id);
+        active.insert(id);
+        let bin = if root { parent } else { Some(self.builder.bin(name, parent)) };
+        for item in self.graph.references_with_budget(node, &["ProjectItemContainer", "Items"], Some(&mut self.bin_budget))? {
             if at(item, &["ProjectItemContainer"]).is_some() {
                 self.walk_bins(item, bin, false, active, depth + 1)?;
             } else if item.has_tag_name("ClipProjectItem") {
+                self.bin_budget.charge_bytes(4 * std::mem::size_of::<(Node<'a, 'i>, Option<BinId>)>())?;
                 self.leaves.push((item, bin));
             } else {
                 self.report.warn(format!("Premiere project item {} is not supported and was skipped", item.tag_name().name()));
             }
         }
-        active.remove(&key(node));
+        active.remove(&id);
         Ok(())
     }
 
@@ -727,4 +747,42 @@ fn cyclic(from: ItemId, to: ItemId, edges: &HashMap<ItemId, Vec<ItemId>>, graph:
         }
     }
     Ok(false)
+}
+
+#[cfg(test)]
+mod bin_tests {
+    use super::*;
+
+    #[test]
+    fn bin_count_and_allocation_budgets_are_independent() {
+        let xml = |name: &str| {
+            format!(
+                r#"<PremiereData Version="3"><Project ObjectID="p"><RootProjectItem ObjectRef="root"/></Project>
+<BinProjectItem ObjectID="root"><ProjectItemContainer><Items><Item ObjectRef="a"/><Item ObjectRef="b"/></Items></ProjectItemContainer></BinProjectItem>
+<BinProjectItem ObjectID="a"><ProjectItem><Name>First</Name></ProjectItem><ProjectItemContainer><Items/></ProjectItemContainer></BinProjectItem>
+<BinProjectItem ObjectID="b"><ProjectItem><Name>{name}</Name></ProjectItem><ProjectItemContainer><Items/></ProjectItemContainer></BinProjectItem></PremiereData>"#
+            )
+        };
+        let opts = ImportOptions::default();
+        let normal = xml("Second");
+        let (imported, _) = import_project_with_budget(normal.as_bytes(), &opts, BinBudget { bins_left: 3, bytes_left: 2048 }).unwrap();
+        let names: Vec<_> = imported
+            .project
+            .root
+            .children
+            .iter()
+            .filter_map(|e| match e {
+                filmcraft_project::BinEntry::Bin(b) => Some(b.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, ["First", "Second"]);
+        let err = import_project_with_budget(normal.as_bytes(), &opts, BinBudget { bins_left: 2, bytes_left: 2048 }).unwrap_err();
+        assert!(err.to_string().contains("bin count budget"), "{err}");
+        let err = import_project_with_budget(xml(&"é".repeat(600)).as_bytes(), &opts, BinBudget { bins_left: 3, bytes_left: 2048 }).unwrap_err();
+        assert!(err.to_string().contains("bin allocation budget"), "{err}");
+        let repeated = normal.replace(r#"<Item ObjectRef="a"/>"#, &r#"<Item ObjectRef="a"/>"#.repeat(100));
+        let err = import_project_with_budget(repeated.as_bytes(), &opts, BinBudget { bins_left: 3, bytes_left: 2048 }).unwrap_err();
+        assert!(err.to_string().contains("bin allocation budget"), "{err}");
+    }
 }

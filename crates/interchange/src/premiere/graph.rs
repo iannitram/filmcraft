@@ -11,6 +11,35 @@ pub(super) const PROJECT: &str = "Premiere Pro project";
 pub(super) const PRESETS: &str = "Premiere effect presets";
 use super::{MAX_OBJECTS, MAX_WORK, MAX_XML_NODES};
 
+/// Bounds on the imported bin tree, independent of the object-reference work budget: each bin
+/// costs its name plus the bookkeeping beside it (FX5).
+pub(super) struct BinBudget {
+    pub bins_left: usize,
+    pub bytes_left: usize,
+}
+
+impl Default for BinBudget {
+    fn default() -> Self {
+        Self { bins_left: 100_000, bytes_left: 64 * 1024 * 1024 }
+    }
+}
+
+impl BinBudget {
+    pub fn charge(&mut self, name: &str) -> Result<()> {
+        const STORAGE: usize = 4 * std::mem::size_of::<filmcraft_project::BinEntry>() + 8 * std::mem::size_of::<roxmltree::NodeId>();
+        let bins = self.bins_left.checked_sub(1).ok_or_else(|| error(PROJECT, "project bin count budget exceeded"))?;
+        let bytes = name.len().checked_add(STORAGE).ok_or_else(|| error(PROJECT, "project bin allocation budget exceeded"))?;
+        self.charge_bytes(bytes)?;
+        self.bins_left = bins;
+        Ok(())
+    }
+
+    pub fn charge_bytes(&mut self, bytes: usize) -> Result<()> {
+        self.bytes_left = self.bytes_left.checked_sub(bytes).ok_or_else(|| error(PROJECT, "project bin allocation budget exceeded"))?;
+        Ok(())
+    }
+}
+
 pub(super) fn error(format: &'static str, message: impl Into<String>) -> Error {
     Error::Parse { format, message: message.into() }
 }
@@ -179,6 +208,11 @@ impl<'a, 'i> Graph<'a, 'i> {
     }
 
     pub fn references(&self, n: Node<'a, 'i>, path: &[&str]) -> Result<Vec<Node<'a, 'i>>> {
+        self.references_with_budget(n, path, None)
+    }
+
+    /// [`Self::references`], charging each reference to a bin budget.
+    pub fn references_with_budget(&self, n: Node<'a, 'i>, path: &[&str], mut budget: Option<&mut BinBudget>) -> Result<Vec<Node<'a, 'i>>> {
         let Some(list) = at(n, path) else { return Ok(Vec::new()) };
         let mut refs = Vec::new();
         for (ordinal, r) in elements(list).enumerate() {
@@ -188,6 +222,10 @@ impl<'a, 'i> Graph<'a, 'i> {
             let index = r.attribute("Index").map(|s| s.parse::<usize>()).transpose().map_err(|e| error(self.format, e.to_string()))?.unwrap_or(ordinal);
             if index >= MAX_OBJECTS {
                 return Err(error(self.format, "object-list index is out of range"));
+            }
+            if let Some(budget) = budget.as_deref_mut() {
+                // spare vector capacity, the sort's scratch and the returned node vector coexist
+                budget.charge_bytes(4 * std::mem::size_of::<(usize, Node<'a, 'i>)>() + 2 * std::mem::size_of::<Node<'a, 'i>>())?;
             }
             refs.push((index, self.resolve(r)?));
         }

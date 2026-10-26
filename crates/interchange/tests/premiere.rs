@@ -1612,3 +1612,30 @@ fn premiere_text_on_the_master_clip_of_a_graphic_becomes_a_text_layer() {
     let (imported, _) = premiere::import_project(dangling.as_bytes(), &ImportOptions::default()).unwrap();
     assert!(!imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0].enabled);
 }
+
+#[test]
+fn premiere_doubling_bin_graph_imports_each_bin_once() {
+    // FX5: walk_bins tracked only the active path, so a small acyclic graph where each bin lists
+    // the next one twice expanded exponentially (2,498 bytes, 11 bins -> 2,046 bins).
+    let mut xml = String::from(r#"<PremiereData Version="3"><Project ObjectID="p"><RootProjectItem ObjectRef="b0"/></Project>"#);
+    for i in 0..=10 {
+        xml.push_str(&format!(r#"<BinProjectItem ObjectID="b{i}"><ProjectItem><Name>Bin {i}</Name></ProjectItem><ProjectItemContainer><Items>"#));
+        if i < 10 {
+            for j in 0..2 {
+                xml.push_str(&format!(r#"<Item Index="{j}" ObjectRef="b{}"/>"#, i + 1));
+            }
+        }
+        xml.push_str("</Items></ProjectItemContainer></BinProjectItem>");
+    }
+    xml.push_str("</PremiereData>");
+    assert!(xml.len() < 2600);
+    let (imported, _) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+    let mut bin = &imported.project.root;
+    for i in 1..=10 {
+        assert_eq!(bin.children.len(), 1, "bin {} must not expand its repeated child twice", i - 1);
+        let filmcraft_project::BinEntry::Bin(child) = &bin.children[0] else { panic!("expected a bin") };
+        assert_eq!(child.name, format!("Bin {i}"));
+        bin = child;
+    }
+    assert!(bin.children.is_empty());
+}
