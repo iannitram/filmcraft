@@ -466,3 +466,30 @@ fn clip_context_menu_adds_a_marker_at_the_playhead_with_one_undo() {
         assert_eq!(serde_json::to_value(&*d.app().session.project).unwrap(), serde_json::to_value(&*after).unwrap());
     }
 }
+
+#[test]
+fn new_project_asks_to_save_unsaved_changes() {
+    // FX1: New ▸ Project and New ▸ Demo Project replaced a dirty project (and its undo history)
+    // without asking; the clean state then dropped the recovery journal.
+    let mut d = Driver::new();
+    d.edit();
+    let items = d.app().session.project.items.len();
+    assert_eq!(d.menu("file.newProject")["dialog"], "newProject");
+    assert!(d.has("newProject.save") && d.has("newProject.dontSave") && d.has("newProject.cancel"));
+    d.click("newProject.cancel");
+    assert!(d.app().session.is_dirty(), "Cancel keeps the unsaved changes");
+    assert_eq!(d.app().session.project.items.len(), items);
+    d.menu("file.newProject");
+    d.click("newProject.dontSave");
+    assert!(d.app().session.project.items.is_empty(), "Don't Save starts the new project");
+    assert!(d.app().ui.clip_dialog.is_none());
+    // nothing unsaved: no prompt
+    assert!(d.menu("file.newProject").get("dialog").is_none_or(|v| v.is_null()));
+
+    // Demo Project asks the same way
+    d.menu("file.openDemoProject");
+    d.edit();
+    assert_eq!(d.menu("file.openDemoProject")["dialog"], "openDemoProject");
+    d.click("openDemoProject.cancel");
+    assert!(d.app().session.is_dirty());
+}

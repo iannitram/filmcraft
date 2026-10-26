@@ -1392,6 +1392,8 @@ mod work_area_tests;
 #[cfg(test)]
 mod auto_save_dir_tests;
 #[cfg(test)]
+mod save_recovery_tests;
+#[cfg(test)]
 mod source_placement_tests;
 
 #[cfg(test)]

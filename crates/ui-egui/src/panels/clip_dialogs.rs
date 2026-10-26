@@ -27,6 +27,8 @@
 //! - Clip Speed / Duration `speedDuration.*`: `speed`, `reverse`, `ripple`,
 //!   `interpolation.<frameSampling|frameBlending|opticalFlow>`;
 //! - Close Project `closeProject.save`, `closeProject.dontSave`, `closeProject.cancel`;
+//! - New ▸ Project and New ▸ Demo Project (asked only with unsaved changes)
+//!   `newProject.save|dontSave|cancel`, `openDemoProject.save|dontSave|cancel`;
 //! - Quit (asked when the window is closed with unsaved changes, see [`intercept_quit`])
 //!   `quit.save`, `quit.dontSave`, `quit.cancel`.
 
@@ -61,6 +63,8 @@ fn meta(command: &str) -> Option<(&'static str, &'static str)> {
         "clip.fieldOptions" => (tl!("Field Options"), "fieldOptions"),
         "clip.speedDuration" => (tl!("Clip Speed / Duration"), "speedDuration"),
         "file.closeProject" => (tl!("Save Project"), "closeProject"),
+        "file.newProject" => (tl!("Save Project"), "newProject"),
+        "file.openDemoProject" => (tl!("Save Project"), "openDemoProject"),
         "app.quit" => (tl!("Save Project"), "quit"),
         _ => return None,
     })
@@ -98,6 +102,14 @@ pub fn route(app: &mut FilmcraftApp, id: &str, params: &Value) -> Option<Result<
     if (id == "file.closeProject" && !app.session.is_dirty()) || id == "app.quit" {
         return None;
     }
+    // New ▸ Project / Demo Project replace the open project: ask only when it has unsaved changes
+    if REPLACES_PROJECT.contains(&id) {
+        if !app.session.is_dirty() {
+            return None;
+        }
+        app.ui.clip_dialog = Some(ClipDialogDraft { command: id.into(), params: params.clone(), info: Value::Null, error: String::new() });
+        return Some(Ok(json!({"dialog": meta(id).map(|m| m.1)})));
+    }
     meta(id)?;
     if let Err(e) = filmcraft_engine::find_command(id).map_or(Ok(()), |c| (c.enabled)(&app.session)) {
         app.ui.status = e.clone();
@@ -107,6 +119,10 @@ pub fn route(app: &mut FilmcraftApp, id: &str, params: &Value) -> Option<Result<
     app.ui.clip_dialog = Some(ClipDialogDraft { command: id.into(), params, info, error: String::new() });
     Some(Ok(json!({"dialog": meta(id).map(|m| m.1)})))
 }
+
+/// Commands that replace the open project; with unsaved changes they ask Save / Don't Save /
+/// Cancel first, and run with their own parameters after Save or Don't Save.
+const REPLACES_PROJECT: [&str; 2] = ["file.newProject", "file.openDemoProject"];
 
 /// A request to close the window (Quit, the title bar's close button, the OS): with unsaved
 /// changes it is cancelled and Save / Don't Save / Cancel is asked first, as in Premiere (#266).
@@ -541,7 +557,7 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
                     }
                 }
             }
-            "file.closeProject" | "app.quit" => {
+            "file.closeProject" | "file.newProject" | "file.openDemoProject" | "app.quit" => {
                 ui.label(tlf!("Save changes to “{project_name}” before closing?", project_name));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -623,6 +639,15 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
                     app.ui.clip_dialog = Some(d);
                     return;
                 }
+            }
+            // New Project / Demo Project replace the project with their own command; when that fails
+            // this project stays open
+            if REPLACES_PROJECT.contains(&d.command.as_str()) {
+                if let Err(e) = app.session.execute(&d.command, d.params.clone()) {
+                    app.ui.status = e.to_string();
+                }
+                app.ui.clip_dialog = None;
+                return;
             }
             // Quit ▸ Don't Save discards the changes: closing the project also clears their recovery
             // snapshot, so the next launch doesn't offer them back
