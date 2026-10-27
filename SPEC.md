@@ -28,9 +28,9 @@ What this fork has or wants that upstream does not. "Send upstream" follows the 
 | D3 | **Round trip with Adobe:** save back to `.prproj` and report what cannot be written | not built; after 1.0 | #57 | after 1.0 |
 | D4 | **Live link with EffectCraft:** an EffectCraft title in a timeline re-renders when saved; one written contract both apps follow | engine side on main as work in progress | #56 | upstream-ready, offered only on the owner's word |
 | D5 | **Self-logging** (`craft-log`, `craft-stage`): app and CLI log files, secret masking, diagnostics | built; Windows gaps | #64 | keep on our fork |
-| D6 | **Data safety:** save, auto-save and recovery never lose newer work (FX1-FX11); export never silently overwrites | FX1-FX7, FX11 built; FX8 open | #21 and the FX8 issue | send upstream |
+| D6 | **Data safety:** save, auto-save and recovery never lose newer work (FX1-FX11); export never silently overwrites | FX1-FX7, FX11 built; FX8 open | #21, #78 (FX8) | send upstream |
 | D7 | **Linux desktop fixes:** Wayland window fit at fractional scale or rotated panels; drag and drop on Wayland | fit built, verify; drop open | #54, #55 | send upstream |
-| D8 | **Releases through the Craft launcher:** signed, offered, never self-installed; Windows, Linux, Mac | not built for this fork | new issue | keep on our fork |
+| D8 | **Releases through the Craft launcher:** signed, offered, never self-installed; Windows, Linux, Mac | not built for this fork | #79 (needs #77 first) | keep on our fork |
 | D9 | **Tests and speed for our footage:** private-corpus ratchet, synthetic Premiere fixtures, the SD export path | not built | #58, #60 | fixtures: send upstream; corpus: keep |
 
 ## Won'ts (owner rulings)

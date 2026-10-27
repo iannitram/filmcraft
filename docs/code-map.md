@@ -1,6 +1,6 @@
 # Code map (our fork)
 
-What each part of the tree owns, how the parts connect, and what is platform-specific. Upstream's detail lives in its own docs (`docs/architecture*`, `AGENTS.md`); this map is ours, for sizing and placing issues. A file-level map (one page per source file, which issue bodies cite as `crates__<crate>__src__<file>.md`) is kept in the owner's private pipeline repo. Read from the tree on 2026-10-26: a Cargo workspace of `crates/*`, `apps/*` and `xtask` (about 50 crates).
+What each part of the tree owns, how the parts connect, and what is platform-specific. Upstream's detail lives in its own docs (`docs/architecture*`, `AGENTS.md`); this map is ours, for sizing and placing issues. A file-level map (one page per source file, which issue bodies cite as `crates__<crate>__src__<file>.md`) is kept in the owner's private pipeline repo. Read from the tree on 2026-10-26: a Cargo workspace of `crates/*`, `apps/*` and `xtask` (52 crates, 3 apps and xtask).
 
 ## Layers
 
@@ -39,7 +39,7 @@ flowchart TD
 
 ## CI
 
-Workflows are upstream's (`.github/workflows/`): `ci.yml` (the test gate, a reusable workflow from `storytold/craft-common-actions`), `windows-arm64.yml`, `nix.yml`, `freebsd.yml`, `packaging-lint.yml`, `sonarcloud.yml`, `release.yml`. On our fork the test gate has never run (see its issue); the other workflows run on push and pull requests.
+Workflows are upstream's (`.github/workflows/`): `ci.yml` (the test gate, a reusable workflow from `storytold/craft-common-actions`), `windows-arm64.yml`, `nix.yml`, `freebsd.yml`, `packaging-lint.yml`, `sonarcloud.yml`, `release.yml`. On our fork the test gate has never run (#77); the other workflows run on push and pull requests.
 
 ## Where our delta lives
 
