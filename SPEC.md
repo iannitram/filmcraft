@@ -15,7 +15,7 @@ Upstream's work is upstream's: we do not rebuild what upstream has open (check `
 
 ## 1.0 for our fork
 
-Cutting a real episode in FilmCraft, with its titles made in EffectCraft, using our builds instead of Adobe: a practice episode first, on the Linux AMD handheld (owner, 2026-10-15; acceptance in #59). *To confirm with the owner:* the exact 1.0 sentence (#59) and the 95% feature list that gates it (#46).
+Cutting a real episode in FilmCraft, with its titles made in EffectCraft, using our builds instead of Adobe: a practice episode first, on the Linux AMD handheld (owner, 2026-10-15; acceptance in #59). 1.0 means a real practice episode cut in FilmCraft with its titles made in EffectCraft, on the Linux AMD handheld, with no Adobe needed; saving back to `.prproj` (D3, #57) is after 1.0. The 95% feature list that gates it is #46.
 
 ## Our delta
 
@@ -25,7 +25,7 @@ What this fork has or wants that upstream does not. "Send upstream" follows the 
 |---|---|---|---|---|
 | D1 | **AMD / Strix Halo acceleration:** VA-API decode on Mesa radeonsi that stays in hardware (open-GOP seek, concealed pictures), deeper decode queue, zero-copy VA surface to Vulkan, more effects on the GPU, unified-memory tuning | partly built (`crates/platform`) | #47-#53 | send upstream, piecewise; help upstream's open VA-API PRs first (#49) |
 | D2 | **Open our old Premiere projects and relink the footage:** the `.prproj` importer (carried from another contributor's upstream PR, authorship kept), import gaps, relink by episode number, relink across machines, media following a moved project folder | importer and folder-follow built; gaps open | #25-#27, #38-#41, #45 | importer: upstream's own PR; fixes: send upstream |
-| D3 | **Round trip with Adobe:** save back to `.prproj` and report what cannot be written | not built | #57 | to confirm with the owner |
+| D3 | **Round trip with Adobe:** save back to `.prproj` and report what cannot be written | not built; after 1.0 | #57 | after 1.0 |
 | D4 | **Live link with EffectCraft:** an EffectCraft title in a timeline re-renders when saved; one written contract both apps follow | engine side on main as work in progress | #56 | upstream-ready, offered only on the owner's word |
 | D5 | **Self-logging** (`craft-log`, `craft-stage`): app and CLI log files, secret masking, diagnostics | built; Windows gaps | #64 | keep on our fork |
 | D6 | **Data safety:** save, auto-save and recovery never lose newer work (FX1-FX11); export never silently overwrites | FX1-FX7, FX11 built; FX8 open | #21 and the FX8 issue | send upstream |
