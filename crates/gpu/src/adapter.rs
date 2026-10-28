@@ -121,7 +121,7 @@ fn wgpu_choice(candidates: &[Candidate], power: PowerPreference) -> Option<usize
 /// `Instance::default()` also enables GL, which on Windows starts a WGL context thread inside the
 /// vendor driver (NVIDIA's `nvoglv64` is both its GL driver and its Vulkan ICD); instances created
 /// and devices dropped concurrently then deadlock in that driver (issue #96).
-pub(crate) fn native_instance() -> wgpu::Instance {
+pub fn native_instance() -> wgpu::Instance {
     wgpu::Instance::new(wgpu::InstanceDescriptor { backends: wgpu::Backends::PRIMARY, ..wgpu::InstanceDescriptor::new_without_display_handle() })
 }
 

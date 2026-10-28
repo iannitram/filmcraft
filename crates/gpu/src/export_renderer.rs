@@ -112,7 +112,10 @@ impl ExportRenderer {
                     return None;
                 }
                 let instance = crate::adapter::native_instance();
-                let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+                let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+                    log::warn!("GPU export unavailable: no Vulkan/Metal/DX12 adapter (OpenGL is not used); exporting on the CPU");
+                    return None;
+                };
                 let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
                 // wgpu's default handler panics on a validation or out-of-memory error; log it and
                 // send the remaining frames to the CPU instead.
