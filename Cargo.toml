@@ -88,7 +88,7 @@ craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.
 rfd = "0.17"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 dbg_macro = "warn"

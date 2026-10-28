@@ -88,6 +88,9 @@ fn tell(text: &str, error: bool) {
 /// Windows release build: attach to the console of the process that started this one (a
 /// terminal), so standard output and error reach it. False when there is none (ours).
 #[cfg(all(target_os = "windows", not(debug_assertions)))]
+// SAFETY: one Win32 call (AttachConsole with the constant ATTACH_PARENT_PROCESS), no pointers;
+// it only fails when there is no parent console.
+#[allow(unsafe_code)]
 fn attach_parent_console() -> bool {
     #[link(name = "kernel32")]
     unsafe extern "system" {
