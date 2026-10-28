@@ -630,8 +630,14 @@ fn many_threads_create_use_and_drop_devices_at_once() {
     }
     drop(tx);
     let deadline = Instant::now() + Duration::from_secs(120);
+    let mut total = 0usize;
     for i in 0..THREADS {
         let left = deadline.saturating_duration_since(Instant::now());
-        assert!(rx.recv_timeout(left).is_ok(), "only {i} of {THREADS} threads finished within 120 s: device setup deadlocked");
+        let received = rx.recv_timeout(left);
+        assert!(received.is_ok(), "only {i} of {THREADS} threads finished within 120 s: device setup deadlocked");
+        total += received.unwrap_or(0);
+    }
+    if total == 0 {
+        eprintln!("SKIPPED: no GPU adapter");
     }
 }

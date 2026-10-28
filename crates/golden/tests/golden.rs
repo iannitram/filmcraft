@@ -742,7 +742,7 @@ fn scenes_are_distinct() {
 /// usable adapter. `require_float_target` additionally demands a renderable `Rgba32Float`, which
 /// only the effect-chain plan needs; main falls back to CPU effects on adapters without it.
 fn device(context: &str, require_float_target: bool) -> Option<(wgpu::Device, wgpu::Queue)> {
-    let instance = wgpu::Instance::default();
+    let instance = filmcraft_gpu::adapter::native_instance();
     let Some(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok() else {
         eprintln!("SKIPPED ({context}): no GPU adapter");
         return None;
