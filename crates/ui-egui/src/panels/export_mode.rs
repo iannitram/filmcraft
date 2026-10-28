@@ -225,7 +225,7 @@ mod tests {
         assert!(fills(pic, inner), "a 16:9 picture fills the 16:9 frame: {inner:?} in {pic:?}");
         let (pic, inner) = preview_rects(area, &hd, (720, 480), (8, 9), (1920, 1080));
         assert!(
-            (inner.width() / pic.width() - 0.75).abs() < 1e-3 && (inner.height() / pic.height() - 4.0 / 3.0).abs() < 0.5,
+            (inner.width() / pic.width() - 0.75).abs() < 1e-3 && (inner.height() - pic.height()).abs() < 0.5,
             "a 4:3 picture between bars: {inner:?} in {pic:?}"
         );
         let fill = ExportSettings { scaling: Scaling::ScaleToFill, ..hd.clone() };

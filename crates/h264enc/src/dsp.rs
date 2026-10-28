@@ -201,7 +201,7 @@ mod tests {
         };
         let a: Vec<u8> = (0..16 * 16).map(|_| rnd()).collect();
         let b: Vec<u8> = (0..16 * 16).map(|_| rnd()).collect();
-        for (w, h) in [(16, 16), (8, 8), (4, 4), (16, 8), (8, 16), (12, 4)] {
+        for (w, h) in [(16, 16), (8, 8), (4, 4), (16, 8), (8, 16), (12, 4), (8, 4), (4, 8)] {
             let mut want = 0;
             for by in (0..h).step_by(4) {
                 for bx in (0..w).step_by(4) {
@@ -238,6 +238,31 @@ mod tests {
                     }
                 }
                 assert_eq!(satd(a, 16, b, 16, w, h), want / 2, "{w}x{h}");
+            }
+        }
+    }
+
+    #[test]
+    fn satd_extremes_match_reference() {
+        // largest possible differences (0 against 255 in every sign pattern) must not overflow the i16 lanes
+        let patterns: [fn(usize, usize) -> bool; 4] = [|_, _| true, |x, y| (x + y) % 2 == 0, |x, _| x % 2 == 0, |x, y| (x / 2 + y) % 3 == 0];
+        for pat in patterns {
+            let a: Vec<u8> = (0..16 * 16).map(|i| if pat(i % 16, i / 16) { 255 } else { 0 }).collect();
+            let b: Vec<u8> = (0..16 * 16).map(|i| if pat(i % 16, i / 16) { 0 } else { 255 }).collect();
+            for (w, h) in [(16, 16), (8, 8), (4, 4), (8, 4), (4, 8), (12, 4)] {
+                let mut want = 0;
+                for by in (0..h).step_by(4) {
+                    for bx in (0..w).step_by(4) {
+                        let mut d = [0i32; 16];
+                        for r in 0..4 {
+                            for c in 0..4 {
+                                d[r * 4 + c] = a[(by + r) * 16 + bx + c] as i32 - b[(by + r) * 16 + bx + c] as i32;
+                            }
+                        }
+                        want += hadamard4x4_sum(&d);
+                    }
+                }
+                assert_eq!(satd(&a, 16, &b, 16, w, h), want / 2, "{w}x{h}");
             }
         }
     }
