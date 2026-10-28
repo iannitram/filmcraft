@@ -677,7 +677,7 @@ fn anamorphic(w: u32, h: u32, par: (u32, u32)) -> (Arc<Project>, ItemId, SourceM
     let id = p.add_item(
         &info.name.clone(),
         Label::Iris,
-        ItemKind::Media(MediaClip {
+        ItemKind::Media(Box::new(MediaClip {
             media: MediaRef::Generator(g.generator.clone()),
             info,
             interpret: filmcraft_project::Interpretation { par: Some(par), ..Default::default() },
@@ -687,7 +687,7 @@ fn anamorphic(w: u32, h: u32, par: (u32, u32)) -> (Arc<Project>, ItemId, SourceM
             offline: false,
             proxy: None,
             identity: None,
-        }),
+        })),
         None,
     );
     let mut m = SourceMap::default();
