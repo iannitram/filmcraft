@@ -32,6 +32,7 @@ What this fork has or wants that upstream does not. "Send upstream" follows the 
 | D7 | **Linux desktop fixes:** Wayland window fit at fractional scale or rotated panels; drag and drop on Wayland | fit built, verify; drop open | #54, #55 | send upstream |
 | D8 | **Releases through the Craft launcher:** signed, offered, never self-installed; Windows, Linux, Mac | not built for this fork | #79 (needs #77 first) | keep on our fork |
 | D9 | **Tests and speed for our footage:** private-corpus ratchet, synthetic Premiere fixtures, the SD export path | not built | #58, #60 | fixtures: send upstream; corpus: keep |
+| D10 | **Windows: --version and --help print to the terminal** (AttachConsole in the release build; the one function outside `crates/platform`'s FFI modules allowed to use unsafe code, owner ruling 2026-10-28 "forbid -> deny + one allow") | built | #88 | keep on our fork |
 
 ## Won'ts (owner rulings)
 
