@@ -1676,3 +1676,38 @@ mod location_tests {
         assert!(std::str::from_utf8(tail.as_bytes()).is_ok());
     }
 }
+
+#[cfg(test)]
+mod suggested_file_name_tests {
+    use super::suggested_file_name;
+
+    #[test]
+    fn a_media_extension_is_dropped() {
+        assert_eq!(suggested_file_name("ntsc169.mp4"), "ntsc169");
+    }
+
+    #[test]
+    fn the_extension_compare_ignores_case() {
+        assert_eq!(suggested_file_name("Desert_Dunes.MOV"), "Desert_Dunes");
+    }
+
+    #[test]
+    fn only_the_last_extension_is_dropped() {
+        assert_eq!(suggested_file_name("clip.final.mp4"), "clip.final");
+    }
+
+    #[test]
+    fn a_name_without_an_extension_is_unchanged() {
+        assert_eq!(suggested_file_name("Sequence 01"), "Sequence 01");
+    }
+
+    #[test]
+    fn a_dot_suffix_that_is_not_a_media_extension_is_unchanged() {
+        assert_eq!(suggested_file_name("My Episode 1.5"), "My Episode 1.5");
+    }
+
+    #[test]
+    fn a_name_that_is_only_an_extension_is_unchanged() {
+        assert_eq!(suggested_file_name("mp4"), "mp4");
+    }
+}
