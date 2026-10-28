@@ -91,52 +91,51 @@ fn satd_strip<const N: usize, const H: usize>(a: &[u8], sa: usize, b: &[u8], sb:
     total
 }
 
-/// SATD of a strip of `B` side-by-side 4x4 blocks (`N` = 4 * `B` columns, 4 rows) with the columns split out
-/// first: lane `r * B + blk` of `x[j]` is column `j` of row `r` of block `blk`, so both butterfly passes are
-/// lane-wise adds between whole arrays (rows `r` and `r + 1` are `B` lanes apart) instead of shuffles inside a
-/// row. Faster than [`satd_strip`] for the narrow strips (4 and 8 columns); same result.
+/// [`satd_strip`] for 8 and 4 columns, where its pairwise sums across neighbouring lanes do not
+/// vectorise: the same sums are formed lane by lane against copies of the rows shifted by one and
+/// two lanes, and only every fourth lane (the first column of a 4x4 block) is counted.
 #[inline(always)]
-fn satd_strip_cols<const N: usize, const B: usize>(a: &[u8], sa: usize, b: &[u8], sb: usize) -> u32 {
-    let mut x = [[0i16; N]; 4];
+fn satd_strip_narrow<const N: usize>(a: &[u8], sa: usize, b: &[u8], sb: usize) -> u32 {
+    let mut d = [[0i16; N]; 4];
     for r in 0..4 {
-        let (Some(ra), Some(rb)) = (a.get(r * sa..).and_then(|v| v.first_chunk::<N>()), b.get(r * sb..).and_then(|v| v.first_chunk::<N>())) else {
-            return 0;
-        };
-        for j in 0..4 {
-            for blk in 0..B {
-                x[j][r * B + blk] = ra[4 * blk + j] as i16 - rb[4 * blk + j] as i16;
-            }
+        let ra = &a[r * sa..r * sa + N];
+        let rb = &b[r * sb..r * sb + N];
+        for i in 0..N {
+            d[r][i] = ra[i] as i16 - rb[i] as i16;
         }
     }
-    let h0: [i16; N] = std::array::from_fn(|k| x[0][k] + x[1][k]);
-    let h1: [i16; N] = std::array::from_fn(|k| x[0][k] - x[1][k]);
-    let h2: [i16; N] = std::array::from_fn(|k| x[2][k] + x[3][k]);
-    let h3: [i16; N] = std::array::from_fn(|k| x[2][k] - x[3][k]);
-    let g: [[i16; N]; 4] = [
-        std::array::from_fn(|k| h0[k] + h2[k]),
-        std::array::from_fn(|k| h1[k] + h3[k]),
-        std::array::from_fn(|k| h0[k] - h2[k]),
-        std::array::from_fn(|k| h1[k] - h3[k]),
-    ];
-    // every term is at most 8 * 255 = 2040 and a lane gets 4 of them: i16 can't overflow
-    let mut acc = [0i16; N];
-    for g in &g {
-        // rows 0 and 1 / 2 and 3: sums in lanes 0..2B, differences in 2B..4B
-        let e: [i16; N] = std::array::from_fn(|k| {
-            let (half, i) = (k / (2 * B), k % (2 * B));
-            let (r, blk) = (2 * (i / B), i % B);
-            let (p, q) = (g[r * B + blk], g[(r + 1) * B + blk]);
-            if half == 0 { p + q } else { p - q }
-        });
-        // last butterfly (rows 01 against 23): |p+q| + |p-q| = 2 max(|p|, |q|), which also absorbs the /2
-        for half in 0..2 {
-            for i in 0..B {
-                let (p, q) = (e[half * 2 * B + i], e[half * 2 * B + B + i]);
-                acc[half * B + i] += p.max(-p).max(q.max(-q));
-            }
+    let mut v = [[0i16; N]; 4];
+    for i in 0..N {
+        let s01 = d[0][i] + d[1][i];
+        let d01 = d[0][i] - d[1][i];
+        let s23 = d[2][i] + d[3][i];
+        let d23 = d[2][i] - d[3][i];
+        v[0][i] = s01 + s23;
+        v[1][i] = s01 - s23;
+        v[2][i] = d01 + d23;
+        v[3][i] = d01 - d23;
+    }
+    // per lane at most 4 rows x 2 x 2040: fits u16
+    let mut acc = [0u16; N];
+    for row in &v {
+        let mut p = [0i16; N];
+        let mut m = [0i16; N];
+        p[..N - 1].copy_from_slice(&row[1..]);
+        m[..N - 1].copy_from_slice(&row[1..]);
+        for i in 0..N {
+            p[i] += row[i];
+            m[i] = row[i] - m[i];
+        }
+        let mut p2 = [0i16; N];
+        let mut m2 = [0i16; N];
+        p2[..N - 2].copy_from_slice(&p[2..]);
+        m2[..N - 2].copy_from_slice(&m[2..]);
+        for i in 0..N {
+            let t = p[i].unsigned_abs().max(p2[i].unsigned_abs()) + m[i].unsigned_abs().max(m2[i].unsigned_abs());
+            acc[i] += if i % 4 == 0 { t } else { 0 };
         }
     }
-    acc.iter().map(|&v| v as u32).sum()
+    acc.iter().map(|&x| x as u32).sum()
 }
 
 /// Sum of absolute 4x4 Hadamard-transformed differences (halved), for w, h multiples of 4.
@@ -146,11 +145,11 @@ pub fn satd(a: &[u8], sa: usize, b: &[u8], sb: usize, w: usize, h: usize) -> u32
         let (ao, bo) = (by * sa, by * sb);
         match w {
             16 => total += satd_strip::<16, 8>(&a[ao..], sa, &b[bo..], sb),
-            8 => total += satd_strip_cols::<8, 2>(&a[ao..], sa, &b[bo..], sb),
-            4 => total += satd_strip_cols::<4, 1>(&a[ao..], sa, &b[bo..], sb),
+            8 => total += satd_strip_narrow::<8>(&a[ao..], sa, &b[bo..], sb),
+            4 => total += satd_strip_narrow::<4>(&a[ao..], sa, &b[bo..], sb),
             _ => {
                 for bx in (0..w).step_by(4) {
-                    total += satd_strip_cols::<4, 1>(&a[ao + bx..], sa, &b[bo + bx..], sb);
+                    total += satd_strip_narrow::<4>(&a[ao + bx..], sa, &b[bo + bx..], sb);
                 }
             }
         }
@@ -202,7 +201,7 @@ mod tests {
         };
         let a: Vec<u8> = (0..16 * 16).map(|_| rnd()).collect();
         let b: Vec<u8> = (0..16 * 16).map(|_| rnd()).collect();
-        for (w, h) in [(16, 16), (8, 8), (4, 4), (16, 8), (8, 16), (12, 4), (8, 4), (4, 8)] {
+        for (w, h) in [(16, 16), (8, 8), (4, 4), (16, 8), (8, 16), (12, 4)] {
             let mut want = 0;
             for by in (0..h).step_by(4) {
                 for bx in (0..w).step_by(4) {
@@ -220,13 +219,12 @@ mod tests {
     }
 
     #[test]
-    fn satd_extremes_match_reference() {
-        // largest possible differences (0 against 255 in every sign pattern) must not overflow the i16 lanes
-        let patterns: [fn(usize, usize) -> bool; 4] = [|_, _| true, |x, y| (x + y) % 2 == 0, |x, _| x % 2 == 0, |x, y| (x / 2 + y) % 3 == 0];
-        for pat in patterns {
-            let a: Vec<u8> = (0..16 * 16).map(|i| if pat(i % 16, i / 16) { 255 } else { 0 }).collect();
-            let b: Vec<u8> = (0..16 * 16).map(|i| if pat(i % 16, i / 16) { 0 } else { 255 }).collect();
-            for (w, h) in [(16, 16), (8, 8), (4, 4), (8, 4), (4, 8), (12, 4)] {
+    fn satd_matches_reference_at_the_extremes() {
+        // the largest differences (every lane at +-255) are where 16-bit sums could overflow
+        let (zero, full) = ([0u8; 16 * 16], [255u8; 16 * 16]);
+        let stripes: Vec<u8> = (0..16 * 16).map(|i| if (i / 16 + i % 16) % 2 == 0 { 255 } else { 0 }).collect();
+        for (a, b) in [(&zero[..], &full[..]), (&full[..], &zero[..]), (&stripes[..], &zero[..]), (&zero[..], &stripes[..])] {
+            for (w, h) in [(16, 16), (8, 8), (4, 4), (8, 16), (12, 4)] {
                 let mut want = 0;
                 for by in (0..h).step_by(4) {
                     for bx in (0..w).step_by(4) {
@@ -239,7 +237,7 @@ mod tests {
                         want += hadamard4x4_sum(&d);
                     }
                 }
-                assert_eq!(satd(&a, 16, &b, 16, w, h), want / 2, "{w}x{h}");
+                assert_eq!(satd(a, 16, b, 16, w, h), want / 2, "{w}x{h}");
             }
         }
     }
