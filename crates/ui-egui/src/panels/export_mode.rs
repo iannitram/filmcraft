@@ -42,16 +42,16 @@ mod quick;
 mod settings;
 
 use presets::preset_manager;
+use preview::preview_column;
 #[cfg(test)]
 pub(crate) use preview::{RANGES, preview_rects};
-use preview::preview_column;
 use queue::queue_column;
 pub use quick::quick_export;
-#[cfg(test)]
-pub(crate) use settings::{PARS, unset_par_label};
 use settings::settings_column;
 #[cfg(test)]
 use settings::{MAX_LOCATION_DISPLAY_BYTES, location_tail};
+#[cfg(test)]
+pub(crate) use settings::{PARS, unset_par_label};
 
 /// Export mode state.
 #[derive(Clone, Debug, Serialize, Deserialize)]

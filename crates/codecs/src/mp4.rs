@@ -300,11 +300,6 @@ impl Mp4Source {
             let (w, h) = aperture.map_or((w, h), |r| (r.w as u32, r.h as u32));
             let rate = nominal_rate(t.samples.iter().map(|s| s.duration), t.timescale);
 
-
-
-
-
-
             color = color_from(entry, w, h);
             if entry
                 .video

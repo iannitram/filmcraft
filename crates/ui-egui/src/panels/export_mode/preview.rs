@@ -45,13 +45,6 @@ pub(super) fn preview_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Re
             let ctx = ui.ctx().clone();
             let tex = app.texture_for(&ctx, "export-preview", key, &img);
 
-
-
-
-
-
-
-
             ui.painter().with_clip_rect(pic).image(tex, inner, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
     } else {
@@ -106,8 +99,7 @@ pub(super) fn preview_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Re
                     ui.label(egui::RichText::new(crate::i18n::t(k)).color(t.text_dim).size(11.5));
                     ui.add(egui::Label::new(egui::RichText::new(v).size(11.5)).wrap_mode(egui::TextWrapMode::Wrap).halign(egui::Align::Min));
                     ui.end_row();
-                }
-;
+                };
                 line(ui, "Output", &output_path(ex));
                 line(ui, "", &sum.format);
                 line(ui, "", &sum.video);

@@ -219,7 +219,6 @@ impl State {
         self.cached(pts, draft_ok)
             .or_else(|| self.frames.range((Excluded(floor), Included(pts))).rev().find(|(p, _)| draft_ok || !self.drafts.contains(p)).map(|(_, f)| f))
             .cloned()
-
     }
 }
 
