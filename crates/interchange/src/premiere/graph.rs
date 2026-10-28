@@ -67,8 +67,7 @@ pub(super) fn decode(bytes: &[u8], format: &'static str) -> Result<String> {
         if !payload.len().is_multiple_of(2) {
             return Err(error(format, "truncated UTF-16 document"));
         }
-        let words: Vec<u16> =
-            payload.chunks_exact(2).map(|b| if little { u16::from_le_bytes([b[0], b[1]]) } else { u16::from_be_bytes([b[0], b[1]]) }).collect();
+        let words: Vec<u16> = payload.as_chunks::<2>().0.iter().map(|b| if little { u16::from_le_bytes(*b) } else { u16::from_be_bytes(*b) }).collect();
         return String::from_utf16(&words).map_err(|e| error(format, e.to_string()));
     }
     std::str::from_utf8(bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes)).map(str::to_string).map_err(|e| error(format, e.to_string()))
