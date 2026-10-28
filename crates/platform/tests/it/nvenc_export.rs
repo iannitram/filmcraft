@@ -89,10 +89,16 @@ fn hardware_export_matches_the_software_export() {
     let report = export(&p, seq, &settings(hw_path.clone(), HardwareEncoding::Auto), &m, &Progress::default()).unwrap();
     let after = hw_encode_stats();
     if after.sessions == before.sessions {
-        assert_eq!(after.declined - before.declined, 1, "Auto attempted hardware and reported the fallback");
+        // NVENC exists but declined: one counted decline. No hardware encoder at all: not a decline.
+        let expected_declines = if filmcraft_platform::nvenc::available() { 1 } else { 0 };
+        assert_eq!(
+            after.declined - before.declined,
+            expected_declines,
+            "Auto with NVENC present but declined reports one fallback; with no hardware encoder it reports none"
+        );
         assert_eq!(after.frames, before.frames);
         assert_eq!(std::fs::read(&soft_path).unwrap(), std::fs::read(&hw_path).unwrap(), "fallback preserves software determinism");
-        eprintln!("no NVENC here: byte-identical software fallback verified");
+        eprintln!("no hardware session here: byte-identical software fallback verified");
         return;
     }
     assert_eq!(report.frames, 72);
@@ -135,10 +141,11 @@ fn what_nvenc_does_not_take_goes_to_the_software_encoder() {
         }),
         (0, 1)
     );
-    // an odd frame size is rounded to even by the pipeline, so NVENC still takes it
+    // an odd frame size is rounded to even by the pipeline, so NVENC takes it. Without NVENC at all
+    // there is no hardware session and no decline: missing hardware is not a decline, so (0, 0)
     let hardware_available = filmcraft_platform::nvenc::available();
     let odd = run("odd.mp4", &|s| s.frame_size = Some((641, 359)));
-    assert_eq!(odd, if hardware_available { (24, 0) } else { (0, 1) });
+    assert_eq!(odd, if hardware_available { (24, 0) } else { (0, 0) });
     // Off never touches the hardware encoder
     assert_eq!(run("off.mp4", &|s| s.hardware_encoding = HardwareEncoding::Off), (0, 0));
     // the decoded file of a declined export is fine
