@@ -28,12 +28,47 @@ use filmcraft_engine::export::{
 };
 use filmcraft_engine::time::{FrameRate, Tick};
 use serde::{Deserialize, Serialize};
+
 use serde_json::{Value, json};
 
 use crate::FilmcraftApp;
 use crate::frames::{FrameKey, Target};
 use crate::native_dialogs::FileDialog;
 use crate::theme::Tokens;
+
+/// Returns a file name suggestion by removing media extensions from the input string.
+/// Media extensions are: mp4 mov m4v mkv webm avi mxf mpg mpeg ts m2ts mts wav mp3 aac flac ogg opus png jpg jpeg tif tiff exr y4m
+/// The function removes the extension only if it's a recognized media extension and is at the end of the string.
+fn suggested_file_name(name: &str) -> String {
+    // List of recognized media extensions (case-insensitive)
+    const MEDIA_EXTENSIONS: &[&str] = &[
+        "mp4", "mov", "m4v", "mkv", "webm", "avi", "mxf", "mpg", "mpeg", "ts", "m2ts", "mts", "wav", "mp3", "aac", "flac", "ogg", "opus", "png", "jpg", "jpeg",
+        "tif", "tiff", "exr", "y4m",
+    ];
+
+    // If the name is empty or only contains a dot, return it as-is
+    if name.is_empty() || name == "." {
+        return name.to_string();
+    }
+
+    // Find the last dot in the string to get the extension
+    if let Some(last_dot) = name.rfind('.') {
+        // Only process if the dot is not at the beginning (i.e., the stem is non-empty)
+        if last_dot > 0 {
+            // Get the extension part (everything after the last dot)
+            let extension = &name[last_dot + 1..];
+
+            // Check if the extension is a recognized media extension (case-insensitive)
+            if MEDIA_EXTENSIONS.iter().any(|&ext| ext.eq_ignore_ascii_case(extension)) {
+                // Return the name without the extension
+                return name[..last_dot].to_string();
+            }
+        }
+    }
+
+    // If no media extension found at the end, return the original name
+    name.to_string()
+}
 
 /// Export mode state.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -150,7 +185,7 @@ pub fn export_params(app: &FilmcraftApp) -> Value {
 fn sync_sequence(app: &mut FilmcraftApp) {
     let Some(seq) = app.session.state.active_sequence else { return };
     if app.ui.export.for_sequence != Some(seq.0) || app.ui.export.file_name.is_empty() {
-        app.ui.export.file_name = app.session.project.item(seq).map(|i| i.name.clone()).unwrap_or_else(|| "Sequence".into());
+        app.ui.export.file_name = app.session.project.item(seq).map(|i| suggested_file_name(&i.name)).unwrap_or_else(|| "Sequence".into());
         app.ui.export.for_sequence = Some(seq.0);
     }
     if app.ui.export.location.is_empty() {
