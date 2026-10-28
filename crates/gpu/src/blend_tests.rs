@@ -12,7 +12,7 @@ use filmcraft_render::plan::execute_cpu;
 
 pub(crate) fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
     crate::tests::hold_gpu_lock();
-    let instance = wgpu::Instance::default();
+    let instance = crate::adapter::native_instance();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
     pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
 }
