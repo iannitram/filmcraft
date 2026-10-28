@@ -472,10 +472,11 @@ fn agent_event_loop(agent: bool) -> Option<eframe::EventLoopBuilderHook> {
             b.with_activate_ignoring_other_apps(false);
         }));
     }
-    // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
-    // manager showed a "no" cursor. Run through XWayland when it's there; FILMCRAFT_WAYLAND=1
-    // keeps the native Wayland backend.
-    #[cfg(all(unix, not(target_os = "macos")))]
+    // Linux uses winit's normal backend selection: Wayland when available, otherwise X11.
+    // The pinned winit fork handles text/uri-list drops on Wayland; egui forwards DroppedFile
+    // to FilmcraftApp's existing file.import path. Forcing X11 here hid that support (#55).
+    // Keep the previous backend policy on other Unix targets.
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
     if std::env::var_os("DISPLAY").is_some() && std::env::var_os("FILMCRAFT_WAYLAND").is_none() {
         return Some(Box::new(|b| {
             use winit::platform::x11::EventLoopBuilderExtX11;
@@ -562,6 +563,16 @@ fn project_patterns() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_keeps_native_backend_selection_and_file_drops() {
+        for agent in [false, true] {
+            let options = super::native_options(agent);
+            assert!(options.event_loop_builder.is_none(), "winit must choose Wayland even when XWayland's DISPLAY is also set");
+            assert_eq!(options.viewport.drag_and_drop, Some(true));
+        }
+    }
+
     /// Start-up registers the hardware decoders whether or not anything is logged (no logger is
     /// installed here, as in a normal run).
     #[test]
