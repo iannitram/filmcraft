@@ -32,6 +32,8 @@ What this fork has or wants that upstream does not. "Send upstream" follows the 
 | D7 | **Linux desktop fixes:** Wayland window fit at fractional scale or rotated panels; drag and drop on Wayland | fit built, verify; drop open | #54, #55 | send upstream |
 | D8 | **Releases through the Craft launcher:** signed, offered, never self-installed; Windows, Linux, Mac | not built for this fork | #79 (needs #77 first) | keep on our fork |
 | D9 | **Tests and speed for our footage:** private-corpus ratchet, synthetic Premiere fixtures, the SD export path | not built | #58, #60 | fixtures: send upstream; corpus: keep |
+| D10 | **Essay mode:** the essay script is a document in the project, aligned to my recorded voiceover, with B-roll coverage per sentence; dialogue search across my whole show library from the subtitle tracks and sidecar files I already have (no speech model needed) | not built | #101-#107 | subtitle track reading: send upstream; builds on upstream's project-wide transcript search (storytold/filmcraft#1759); the rest offered only on my word |
+| D11 | **Source ledger:** each source marked mine, borrowed footage or borrowed music; a timeline strip and panel showing how much borrowed material sits under commentary and where the long clean runs are; export writes chapters and source citations for the video description. A planning aid, not a fair-use ruling | not built | #108-#111 | keep on our fork; offer later on my word |
 
 ## Won'ts (owner rulings)
 
