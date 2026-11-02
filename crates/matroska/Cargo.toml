@@ -11,6 +11,9 @@ workspace = true
 
 [dependencies]
 craft-media = { workspace = true, features = ["matroska"] }
+filmcraft-captions = { workspace = true }
+filmcraft-time = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 filmcraft-testkit = { workspace = true }
