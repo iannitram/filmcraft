@@ -57,6 +57,7 @@ macro_rules! id_type {
 
 mod item;
 mod label;
+mod ledger;
 mod sequence;
 mod settings;
 mod source;
@@ -65,6 +66,7 @@ mod view;
 
 pub use item::{AudioChannelMap, Bin, BinEntry, Interpretation, ItemKind, MediaClip, MediaIdentity, MediaRef, ProjectItem};
 pub use label::Label;
+pub use ledger::{SourceClass, SourceLabel, SourceLedger, SourceRule, SourceRuleKind, folder_key as source_folder_key};
 pub(crate) use sequence::bounded_time_range;
 pub use sequence::{
     MAX_FRAME_PIXELS, MAX_FRAME_SIDE, MAX_PIXEL_ASPECT, Sequence, SequenceSettings, SplitMarks, checked_par, conformed_size, par_ratio, sane_par,
@@ -86,6 +88,10 @@ id_type!(MarkerId);
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Project {
     pub name: String,
+    /// Source ownership and citations, keyed by item/bin just like transcripts and narrations.
+    /// Additive migration: absent in older projects, whose sources resolve to unknown.
+    #[serde(default, skip_serializing_if = "SourceLedger::is_empty")]
+    pub source_ledger: SourceLedger,
     /// Custom marker/clip swatches saved only with this project (schema v16).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_colors: Vec<HexColor>,
@@ -137,6 +143,7 @@ impl Project {
     pub fn new(name: &str) -> Self {
         Self {
             name: name.into(),
+            source_ledger: SourceLedger::default(),
             custom_colors: Vec::new(),
             custom_color_names: BTreeMap::new(),
             settings: ProjectSettings::default(),
@@ -178,6 +185,8 @@ impl Project {
         self.search_bins.iter().for_each(|b| see(b.id.0));
         // deleting an item leaves these entries behind: a new item taking that id would inherit them
         self.transcripts.keys().chain(self.source_graphics.keys()).chain(self.narrations.keys()).for_each(|i| see(i.0));
+        self.source_ledger.items.keys().for_each(|i| see(i.0));
+        self.source_ledger.bins.keys().for_each(|b| see(b.0));
         // `lut.import` names LUTs `lut<id>`
         self.luts.iter().filter_map(|l| l.id.strip_prefix("lut")?.parse().ok()).for_each(&mut see);
         fn mixer(m: &MixerStrip) -> impl Iterator<Item = u64> + '_ {
