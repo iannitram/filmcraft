@@ -72,7 +72,7 @@ fn app_icon() -> egui::IconData {
 /// box, as before, so `--help` is not silent and a bad option does not quit without a word.
 fn tell(text: &str, error: bool) {
     #[cfg(all(target_os = "windows", not(debug_assertions)))]
-    if !attach_parent_console() {
+    if !filmcraft_platform::console::attach_parent_console() {
         let level = if error { rfd::MessageLevel::Error } else { rfd::MessageLevel::Info };
         let _ = rfd::MessageDialog::new().set_level(level).set_title("FilmCraft").set_description(text).show();
         return;
@@ -85,20 +85,6 @@ fn tell(text: &str, error: bool) {
         print!("{text}");
         let _ = std::io::stdout().flush();
     }
-}
-
-/// Windows release build: attach to the console of the process that started this one (a
-/// terminal), so standard output and error reach it. False when there is none (ours).
-#[cfg(all(target_os = "windows", not(debug_assertions)))]
-fn attach_parent_console() -> bool {
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn AttachConsole(process_id: u32) -> i32;
-    }
-    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
-    // SAFETY: a plain Win32 call with a constant argument; it only fails when there is no parent
-    // console or this process already has one.
-    unsafe { AttachConsole(ATTACH_PARENT_PROCESS) != 0 }
 }
 
 fn main() -> eframe::Result {

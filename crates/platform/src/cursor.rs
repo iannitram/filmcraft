@@ -3,7 +3,7 @@
 //! While files are dragged in from the OS file manager, winit on Windows delivers no cursor events
 //! (it only reports hovered and dropped files), so the UI cannot learn where a drop landed.
 //!
-//! This is the one non-media OS call in this crate: `crates/platform` is the only crate allowed
+//! This and `console` are the only non-media OS calls in this crate: `crates/platform` is the only crate allowed
 //! `unsafe` (AGENTS.md §0.3, ADR 0001), so the single `GetCursorPos` call lives here rather than
 //! in the UI. It is read-only, has a safe `Option`-returning API, and every other platform (and a
 //! failed call) falls back to the last pointer position egui saw. Drop it once winit reports the
