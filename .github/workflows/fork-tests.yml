@@ -1,9 +1,16 @@
 name: Fork tests
 
+# Runs the filmcraft crates' test suites on Linux, Windows and macOS. ci.yml's gate runs on Linux only.
+
 on:
   push:
     branches: [main]
   pull_request:
+
+# A newer push to a PR branch cancels its older run; every push to main runs to the end.
+concurrency:
+  group: fork-tests-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -19,10 +26,14 @@ jobs:
     env:
       FILMCRAFT_NO_HARDWARE: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Test selected crates
         run: cargo test --release -p filmcraft-interchange -p filmcraft-format -p filmcraft-edit
