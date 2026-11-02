@@ -78,7 +78,9 @@ fn recover_keeps_the_original_unless_the_new_journal_holds_it() {
     start(&mut c, &d);
     c.execute("prefs.set", json!({"key": "autoSave.recoveryJournal", "value": false})).unwrap();
     assert_eq!(c.recovery_candidates().len(), 1);
-    c.execute("file.recover", json!({})).unwrap();
+    // the recovered project opens; with no journal to confirm it, Recover says the old copy stays
+    let kept = c.execute("file.recover", json!({})).unwrap_err();
+    assert!(format!("{kept:?}").contains("original recovery copy is retained"), "{kept:?}");
     c.shutdown();
 
     let mut e = Session::default();

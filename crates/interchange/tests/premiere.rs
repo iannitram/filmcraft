@@ -865,7 +865,6 @@ fn premiere_text_alignment_numbers_are_left_right_centre() {
 /// starts at its canvas's own start.
 #[test]
 fn premiere_text_of_a_graphic_becomes_a_text_layer() {
-    use filmcraft_project::ParamValue;
     let xml = project_with_text_layer(&source_text_json(TITLE_JSON));
     let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
     let said = report.to_string();
@@ -887,6 +886,15 @@ fn premiere_text_of_a_graphic_becomes_a_text_layer() {
     let layers: Vec<_> = video.graphic_layers().collect();
     assert_eq!(layers.len(), 1);
     let layer = layers[0];
+    check_synthetic_title_layer(layer);
+
+    // the sound of the same source has nothing to play: it stays as it was, switched off
+    assert!(!sequence.audio_tracks[0].items[0].enabled);
+}
+
+/// The style and place the synthetic title's text layer was given.
+fn check_synthetic_title_layer(layer: &filmcraft_project::EffectInstance) {
+    use filmcraft_project::ParamValue;
     let text = |id: &str| match &layer.param(id).unwrap().value {
         ParamValue::Text(s) => s.clone(),
         other => panic!("{id}: {other:?}"),
@@ -912,9 +920,6 @@ fn premiere_text_of_a_graphic_becomes_a_text_layer() {
     // and it is a layer the renderer can evaluate
     let spec = filmcraft_project::graphic::eval_layer(layer, Tick::ZERO, (1920, 1080)).expect("a text layer");
     assert!(matches!(&spec.content, filmcraft_project::graphic::LayerContent::Text(t) if t.text == "A synthetic title" && t.size == 77.5));
-
-    // the sound of the same source has nothing to play: it stays as it was, switched off
-    assert!(!sequence.audio_tracks[0].items[0].enabled);
 }
 
 /// A title of more than one line: the application ends each line with a carriage return, and a
@@ -1148,7 +1153,6 @@ fn source_text_binary_with_shadow_distance(distance: Option<f32>) -> Vec<u8> {
 /// The binary form newer project versions write holds the same things in numbered fields.
 #[test]
 fn premiere_text_in_the_binary_form_becomes_a_text_layer() {
-    use filmcraft_project::ParamValue;
     let xml = project_with_text_layer(&source_text_binary());
     let (imported, report) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
     let said = report.to_string();
@@ -1159,6 +1163,20 @@ fn premiere_text_in_the_binary_form_becomes_a_text_layer() {
     let layers: Vec<_> = video.graphic_layers().collect();
     assert_eq!(layers.len(), 1);
     let layer = layers[0];
+    check_binary_title_layer(layer);
+
+    // A value at its default is not written. The shadow's distance is 7 there and 10 here, so a
+    // shadow that is shown without a distance gets the 7 it had.
+    let xml = project_with_text_layer(&source_text_binary_with_shadow_distance(None));
+    let (imported, _) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
+    let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
+    let layer = video.graphic_layers().next().expect("a text layer");
+    assert_eq!(layer.f64_at("shadow_distance", Tick::ZERO), 7.0);
+}
+
+/// The style and place read from the binary form of the title's text.
+fn check_binary_title_layer(layer: &filmcraft_project::EffectInstance) {
+    use filmcraft_project::ParamValue;
     let text = |id: &str| match &layer.param(id).unwrap().value {
         ParamValue::Text(s) => s.clone(),
         other => panic!("{id}: {other:?}"),
@@ -1177,6 +1195,12 @@ fn premiere_text_in_the_binary_form_becomes_a_text_layer() {
     assert!(matches!(layer.param("stroke_color").unwrap().value, ParamValue::Color(c) if c == [0.0, 0.0, 0.0, 1.0]));
     assert!(matches!(layer.param("shadow").unwrap().value, ParamValue::Bool(true)));
     assert!(matches!(layer.param("shadow_color").unwrap().value, ParamValue::Color(c) if c == [0.0, 0.0, 0.0, 1.0]));
+    check_binary_title_shadow_and_box(layer);
+}
+
+/// The shadow, leading and background box read from the binary form, and its one style run.
+fn check_binary_title_shadow_and_box(layer: &filmcraft_project::EffectInstance) {
+    use filmcraft_project::ParamValue;
     let number = |id: &str| layer.f64_at(id, Tick::ZERO);
     assert_eq!((number("shadow_opacity"), number("shadow_angle"), number("shadow_distance")), (50.0, -205.0, 10.0));
     assert_eq!((number("shadow_size"), number("shadow_blur")), (3.0, 30.0), "the blur is field 16, the angle field 13");
@@ -1193,14 +1217,6 @@ fn premiere_text_in_the_binary_form_becomes_a_text_layer() {
     let runs = &layer.layer.as_ref().expect("a style run").runs;
     assert_eq!(runs.len(), 1, "{runs:?}");
     assert_eq!((runs[0].start, runs[0].end, runs[0].style.size), (4, 9, Some(40.0)));
-
-    // A value at its default is not written. The shadow's distance is 7 there and 10 here, so a
-    // shadow that is shown without a distance gets the 7 it had.
-    let xml = project_with_text_layer(&source_text_binary_with_shadow_distance(None));
-    let (imported, _) = premiere::import_project(xml.as_bytes(), &ImportOptions::default()).unwrap();
-    let video = &imported.project.sequence(imported.sequences[0]).unwrap().video_tracks[0].items[0];
-    let layer = video.graphic_layers().next().expect("a text layer");
-    assert_eq!(layer.f64_at("shadow_distance", Tick::ZERO), 7.0);
 }
 
 /// Every number in the binary form comes from the file: cut short anywhere, or with any byte
@@ -1339,7 +1355,6 @@ fn project_with_legacy_title(prefs: &str) -> String {
 /// 1920x1080 frame), and a style run for the characters that look different.
 #[test]
 fn premiere_legacy_title_becomes_a_text_layer() {
-    use filmcraft_project::{CharStyle, ParamValue, StyleRun};
     let value = base64(&legacy_title_prefs(LEGACY_TITLE));
     let whole = project_with_legacy_title(&format!("<ImporterPrefs Encoding=\"base64\" BinaryHash=\"h1\">{value}</ImporterPrefs>"));
     // written once elsewhere in the file and named by its hash here
@@ -1358,57 +1373,74 @@ fn premiere_legacy_title_becomes_a_text_layer() {
         assert_eq!((video.start, video.duration, video.source_in), (Tick::ZERO, Tick(2 * TPS), Tick::ZERO));
         let layers: Vec<_> = video.graphic_layers().collect();
         assert_eq!(layers.len(), 2, "one for each line");
-        let layer = layers[0];
-        let text = |layer: &filmcraft_project::EffectInstance, id: &str| match &layer.param(id).unwrap().value {
-            ParamValue::Text(s) => s.clone(),
-            other => panic!("{id}: {other:?}"),
-        };
-        assert_eq!((text(layer, "text").as_str(), text(layer, "font").as_str(), text(layer, "font_style").as_str()), ("Big small", "Example Sans", "Bold"));
-        assert_eq!(layer.f64_at("size", Tick::ZERO), 80.0);
-        assert!(matches!(layer.param("align").unwrap().value, ParamValue::Choice(1)), "centred");
-        assert!(matches!(layer.param("caps").unwrap().value, ParamValue::Choice(2)), "small capitals");
-        // the middle of the block (200 + 400 / 2) on the line's baseline, in a frame 640x360 larger
-        assert_eq!(layer.vec2_at("position", Tick::ZERO), Vec2::new(400.0 + 320.0, 360.0 + 180.0));
-        assert!(matches!(layer.param("fill").unwrap().value, ParamValue::Bool(true)));
-        assert!(matches!(layer.param("fill_color").unwrap().value, ParamValue::Color(c) if c == [1.0, 1.0, 0.0, 1.0]), "{:?}", layer.param("fill_color"));
-        assert!(matches!(layer.param("stroke").unwrap().value, ParamValue::Bool(true)));
-        assert!(matches!(layer.param("stroke_color").unwrap().value, ParamValue::Color(c) if c == [0.0, 0.0, 1.0, 1.0]));
-        assert_eq!(layer.f64_at("stroke_width", Tick::ZERO), 6.0);
-        assert!(matches!(layer.param("stroke2").unwrap().value, ParamValue::Bool(false)));
-        assert!(matches!(layer.param("shadow").unwrap().value, ParamValue::Bool(true)));
-        assert!(matches!(layer.param("shadow_color").unwrap().value, ParamValue::Color(c) if c == [0.0, 0.0, 0.0, 1.0]));
-        assert!((layer.f64_at("shadow_opacity", Tick::ZERO) - 80.0).abs() < 0.001, "a fifth clear: {}", layer.f64_at("shadow_opacity", Tick::ZERO));
-        assert_eq!(
-            (
-                layer.f64_at("shadow_distance", Tick::ZERO),
-                layer.f64_at("shadow_angle", Tick::ZERO),
-                layer.f64_at("shadow_size", Tick::ZERO),
-                layer.f64_at("shadow_blur", Tick::ZERO)
-            ),
-            (12.0, 135.0, 3.0, 30.0)
-        );
-        // "small": the other font, half the size, red, no small capitals
-        let runs = &layer.layer.as_ref().expect("a style run").runs;
-        let other = CharStyle {
-            font: Some("Example Serif".into()),
-            font_style: Some("Regular".into()),
-            size: Some(40.0),
-            fill: Some([1.0, 0.0, 0.0, 1.0]),
-            caps: Some(0),
-            ..Default::default()
-        };
-        assert_eq!(runs, &[StyleRun { start: 4, end: 9, style: other }]);
-        let spec = filmcraft_project::graphic::eval_layer(layer, Tick::ZERO, (1920, 1080)).expect("a text layer");
-        assert!(matches!(&spec.content, filmcraft_project::graphic::LayerContent::Text(t) if t.text == "Big small" && t.size == 80.0));
-        // the second line: its own layer on its own baseline, 80 lower, in one style
-        let second = layers[1];
-        assert_eq!((text(second, "text").as_str(), text(second, "font").as_str()), ("below", "Example Sans"));
-        assert_eq!(second.vec2_at("position", Tick::ZERO), Vec2::new(400.0 + 320.0, 440.0 + 180.0));
-        assert_eq!(second.f64_at("size", Tick::ZERO), 80.0);
-        assert!(second.layer.as_ref().is_none_or(|extra| extra.runs.is_empty()));
+        check_legacy_title_layers(&layers);
         // the sound of the same source has nothing to play: it stays as it was, switched off
         assert!(!sequence.audio_tracks[0].items[0].enabled);
     }
+}
+
+/// The two text layers of the Title Designer title: one per line, each on its own baseline.
+fn check_legacy_title_layers(layers: &[&filmcraft_project::EffectInstance]) {
+    use filmcraft_project::ParamValue;
+    let layer = layers[0];
+    let text = |layer: &filmcraft_project::EffectInstance, id: &str| match &layer.param(id).unwrap().value {
+        ParamValue::Text(s) => s.clone(),
+        other => panic!("{id}: {other:?}"),
+    };
+    assert_eq!((text(layer, "text").as_str(), text(layer, "font").as_str(), text(layer, "font_style").as_str()), ("Big small", "Example Sans", "Bold"));
+    assert_eq!(layer.f64_at("size", Tick::ZERO), 80.0);
+    assert!(matches!(layer.param("align").unwrap().value, ParamValue::Choice(1)), "centred");
+    assert!(matches!(layer.param("caps").unwrap().value, ParamValue::Choice(2)), "small capitals");
+    // the middle of the block (200 + 400 / 2) on the line's baseline, in a frame 640x360 larger
+    assert_eq!(layer.vec2_at("position", Tick::ZERO), Vec2::new(400.0 + 320.0, 360.0 + 180.0));
+    assert!(matches!(layer.param("fill").unwrap().value, ParamValue::Bool(true)));
+    assert!(matches!(layer.param("fill_color").unwrap().value, ParamValue::Color(c) if c == [1.0, 1.0, 0.0, 1.0]), "{:?}", layer.param("fill_color"));
+    assert!(matches!(layer.param("stroke").unwrap().value, ParamValue::Bool(true)));
+    assert!(matches!(layer.param("stroke_color").unwrap().value, ParamValue::Color(c) if c == [0.0, 0.0, 1.0, 1.0]));
+    assert_eq!(layer.f64_at("stroke_width", Tick::ZERO), 6.0);
+    assert!(matches!(layer.param("stroke2").unwrap().value, ParamValue::Bool(false)));
+    assert!(matches!(layer.param("shadow").unwrap().value, ParamValue::Bool(true)));
+    assert!(matches!(layer.param("shadow_color").unwrap().value, ParamValue::Color(c) if c == [0.0, 0.0, 0.0, 1.0]));
+    assert!((layer.f64_at("shadow_opacity", Tick::ZERO) - 80.0).abs() < 0.001, "a fifth clear: {}", layer.f64_at("shadow_opacity", Tick::ZERO));
+    assert_eq!(
+        (
+            layer.f64_at("shadow_distance", Tick::ZERO),
+            layer.f64_at("shadow_angle", Tick::ZERO),
+            layer.f64_at("shadow_size", Tick::ZERO),
+            layer.f64_at("shadow_blur", Tick::ZERO)
+        ),
+        (12.0, 135.0, 3.0, 30.0)
+    );
+    check_legacy_title_runs_and_second_line(layers);
+}
+
+/// The first line's style run, and the second line's own layer.
+fn check_legacy_title_runs_and_second_line(layers: &[&filmcraft_project::EffectInstance]) {
+    use filmcraft_project::{CharStyle, ParamValue, StyleRun};
+    let layer = layers[0];
+    let text = |layer: &filmcraft_project::EffectInstance, id: &str| match &layer.param(id).unwrap().value {
+        ParamValue::Text(s) => s.clone(),
+        other => panic!("{id}: {other:?}"),
+    };
+    // "small": the other font, half the size, red, no small capitals
+    let runs = &layer.layer.as_ref().expect("a style run").runs;
+    let other = CharStyle {
+        font: Some("Example Serif".into()),
+        font_style: Some("Regular".into()),
+        size: Some(40.0),
+        fill: Some([1.0, 0.0, 0.0, 1.0]),
+        caps: Some(0),
+        ..Default::default()
+    };
+    assert_eq!(runs, &[StyleRun { start: 4, end: 9, style: other }]);
+    let spec = filmcraft_project::graphic::eval_layer(layer, Tick::ZERO, (1920, 1080)).expect("a text layer");
+    assert!(matches!(&spec.content, filmcraft_project::graphic::LayerContent::Text(t) if t.text == "Big small" && t.size == 80.0));
+    // the second line: its own layer on its own baseline, 80 lower, in one style
+    let second = layers[1];
+    assert_eq!((text(second, "text").as_str(), text(second, "font").as_str()), ("below", "Example Sans"));
+    assert_eq!(second.vec2_at("position", Tick::ZERO), Vec2::new(400.0 + 320.0, 440.0 + 180.0));
+    assert_eq!(second.f64_at("size", Tick::ZERO), 80.0);
+    assert!(second.layer.as_ref().is_none_or(|extra| extra.runs.is_empty()));
 }
 
 /// A title that cannot be read, or has no text, leaves its clip as it was before titles were

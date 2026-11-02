@@ -423,71 +423,7 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
                             }
                         }
                     }
-                    // A graphic kept in the project (a title that a newer version "upgraded" is
-                    // one) has its text layers on its master clip, shared by every clip made from
-                    // it; the clip's own chain holds only its place. A master clip that cannot be
-                    // followed leaves the clip as it was.
-                    if generated
-                        && layers.is_empty()
-                        && kind == TrackKind::Video
-                        && let Some(master) = at(sub, &["MasterClip"]).and_then(|reference| self.graph.resolve(reference).ok())
-                        && let Some(chain) = at(master, &["VideoComponentChain"]).and_then(|reference| self.graph.resolve(reference).ok())
-                        && let Ok(components) = self.graph.references(chain, &["ComponentChain", "Components"])
-                    {
-                        for component in components {
-                            if child_text(component, "MatchName") == Some(text::MATCH_NAME) {
-                                let root = self.graph.root;
-                                let shared = self.shared_values.get_or_insert_with(|| text::shared_values(root, "StartKeyframeValue"));
-                                if let Some(mut layer) = text::layer(&self.graph, component, Tick::ZERO, sequence_size, shared, self.report)? {
-                                    text::fit_pixels(&mut layer, sequence.settings.par);
-                                    layers.push(layer);
-                                }
-                            }
-                        }
-                    }
-                    // a title made in the Title Designer: its text layers come from its source
-                    if generated
-                        && layers.is_empty()
-                        && kind == TrackKind::Video
-                        && let Some(title) = self.titles.get(&source_item)
-                    {
-                        layers = title.layers_in(sequence_size, sequence.settings.par);
-                    }
-                    // An offline placeholder on an upper track would cover the picture under it
-                    // for as long as the title lasted: keep the clip where it is, switched off.
-                    if generated && layers.is_empty() {
-                        imported.enabled = false;
-                        self.report.warn("Premiere clips of graphics, titles or mattes made inside Premiere are kept on the timeline switched off; their content is not imported");
-                    } else if generated {
-                        // Its text could be read: a graphic clip. The source is a transparent
-                        // canvas the size of the sequence frame, the text layers are effects on
-                        // the clip, and the clip starts at the canvas's own start (the file has
-                        // it an hour into a source without end), so every keyframe moves with it.
-                        let moved = imported.source_in;
-                        imported.item = self.graphic_canvas(sequence_size, sequence.settings.frame_rate);
-                        imported.source_in = Tick::ZERO;
-                        imported.speed = 1.0;
-                        imported.effects.extend(layers);
-                        for effect in &mut imported.effects {
-                            text::shift_keyframes(effect, moved);
-                        }
-                        self.report
-                            .info("Premiere text layers were imported as FilmCraft text layers; a font that is not installed here is replaced by a stand-in");
-                    }
-                    if self.solids.contains(&source_item) {
-                        // A generator has no time of its own: the clip starts at its start (the
-                        // file has it an hour into a source without end), and every keyframe
-                        // moves with it. It has no sound either.
-                        let moved = imported.source_in;
-                        imported.source_in = Tick::ZERO;
-                        imported.speed = 1.0;
-                        for effect in &mut imported.effects {
-                            text::shift_keyframes(effect, moved);
-                        }
-                        if kind == TrackKind::Audio {
-                            imported.enabled = false;
-                        }
-                    }
+                    self.finish_generated(&mut imported, layers, sub, source_item, kind, &sequence.settings)?;
                     clip_ids.insert(key(item), imported.id);
                     imported_track.items.push(imported);
                 }
@@ -527,6 +463,87 @@ impl<'a, 'i> Importer<'a, 'i, '_, '_> {
             self.report.info("Premiere sequence colour-management settings use the FilmCraft sequence defaults");
         }
         self.builder.put_sequence(id, sequence);
+        Ok(())
+    }
+
+    /// A clip of a graphic, title or generator made inside Premiere: its text layers become
+    /// FilmCraft text layers on a transparent canvas, and a generator starts at its own start.
+    fn finish_generated(
+        &mut self,
+        imported: &mut filmcraft_project::TrackItem,
+        mut layers: Vec<filmcraft_project::EffectInstance>,
+        sub: Node<'a, 'i>,
+        source_item: ItemId,
+        kind: TrackKind,
+        settings: &SequenceSettings,
+    ) -> Result<()> {
+        let generated = self.generated.contains(&source_item);
+        let sequence_size = (settings.width, settings.height);
+        // A graphic kept in the project (a title that a newer version "upgraded" is
+        // one) has its text layers on its master clip, shared by every clip made from
+        // it; the clip's own chain holds only its place. A master clip that cannot be
+        // followed leaves the clip as it was.
+        if generated
+            && layers.is_empty()
+            && kind == TrackKind::Video
+            && let Some(master) = at(sub, &["MasterClip"]).and_then(|reference| self.graph.resolve(reference).ok())
+            && let Some(chain) = at(master, &["VideoComponentChain"]).and_then(|reference| self.graph.resolve(reference).ok())
+            && let Ok(components) = self.graph.references(chain, &["ComponentChain", "Components"])
+        {
+            for component in components {
+                if child_text(component, "MatchName") == Some(text::MATCH_NAME) {
+                    let root = self.graph.root;
+                    let shared = self.shared_values.get_or_insert_with(|| text::shared_values(root, "StartKeyframeValue"));
+                    if let Some(mut layer) = text::layer(&self.graph, component, Tick::ZERO, sequence_size, shared, self.report)? {
+                        text::fit_pixels(&mut layer, settings.par);
+                        layers.push(layer);
+                    }
+                }
+            }
+        }
+        // a title made in the Title Designer: its text layers come from its source
+        if generated
+            && layers.is_empty()
+            && kind == TrackKind::Video
+            && let Some(title) = self.titles.get(&source_item)
+        {
+            layers = title.layers_in(sequence_size, settings.par);
+        }
+        // An offline placeholder on an upper track would cover the picture under it
+        // for as long as the title lasted: keep the clip where it is, switched off.
+        if generated && layers.is_empty() {
+            imported.enabled = false;
+            self.report
+                .warn("Premiere clips of graphics, titles or mattes made inside Premiere are kept on the timeline switched off; their content is not imported");
+        } else if generated {
+            // Its text could be read: a graphic clip. The source is a transparent
+            // canvas the size of the sequence frame, the text layers are effects on
+            // the clip, and the clip starts at the canvas's own start (the file has
+            // it an hour into a source without end), so every keyframe moves with it.
+            let moved = imported.source_in;
+            imported.item = self.graphic_canvas(sequence_size, settings.frame_rate);
+            imported.source_in = Tick::ZERO;
+            imported.speed = 1.0;
+            imported.effects.extend(layers);
+            for effect in &mut imported.effects {
+                text::shift_keyframes(effect, moved);
+            }
+            self.report.info("Premiere text layers were imported as FilmCraft text layers; a font that is not installed here is replaced by a stand-in");
+        }
+        if self.solids.contains(&source_item) {
+            // A generator has no time of its own: the clip starts at its start (the
+            // file has it an hour into a source without end), and every keyframe
+            // moves with it. It has no sound either.
+            let moved = imported.source_in;
+            imported.source_in = Tick::ZERO;
+            imported.speed = 1.0;
+            for effect in &mut imported.effects {
+                text::shift_keyframes(effect, moved);
+            }
+            if kind == TrackKind::Audio {
+                imported.enabled = false;
+            }
+        }
         Ok(())
     }
 

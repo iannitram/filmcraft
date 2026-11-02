@@ -120,12 +120,34 @@ pub(crate) fn leb128(data: &[u8]) -> Result<(u64, usize)> {
             return Ok((v, i + 1));
         }
     }
-    Ok((v, 8))
+    Err(Error::Truncated)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hostile_lengths_leb128_requires_termination() {
+        for byte in [0x80, 0xff] {
+            let mut data = [byte; 9];
+            data[8] = 0; // A ninth byte cannot terminate an eight-byte AV1 LEB128.
+            for len in 0..=data.len() {
+                let result = std::panic::catch_unwind(|| leb128(&data[..len]));
+                assert!(matches!(result.expect("LEB128 parsing must not panic"), Err(Error::Truncated)));
+            }
+        }
+    }
+
+    #[test]
+    fn hostile_lengths_leb128_preserves_terminated_values() {
+        assert_eq!(leb128(&[0]).unwrap(), (0, 1));
+        for len in 1..=8 {
+            let mut data = [0xff; 9];
+            data[len - 1] = 0x7f;
+            assert_eq!(leb128(&data).unwrap(), ((1u64 << (7 * len)) - 1, len));
+        }
+    }
 
     #[test]
     fn f_reads_msb_first() {
@@ -199,7 +221,9 @@ mod tests {
         assert_eq!(leb128(&[0x7F]), Ok((127, 1)));
         assert_eq!(leb128(&[0x80, 0x01]), Ok((128, 2)));
         assert!(matches!(leb128(&[0x80]), Err(Error::Truncated)));
-        assert_eq!(leb128(&[0x80; 8]), Ok((0, 8)));
+        // the longest form ends on its eighth byte; one still continued there is cut short (#2801)
+        assert_eq!(leb128(&[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00]), Ok((0, 8)));
+        assert!(matches!(leb128(&[0x80; 8]), Err(Error::Truncated)));
     }
 
     #[test]

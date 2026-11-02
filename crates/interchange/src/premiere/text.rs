@@ -192,6 +192,19 @@ pub(super) fn layer(
     }
 
     // the layer's own transform: the parameters after Source Text
+    transform(graph, parameters, origin, sequence_size, &mut layer, report)?;
+    Ok(Some(layer))
+}
+
+/// A text layer's own transform, read from the parameters after its Source Text.
+fn transform<'a, 'i>(
+    graph: &Graph<'a, 'i>,
+    parameters: Vec<Node<'a, 'i>>,
+    origin: Tick,
+    sequence_size: (u32, u32),
+    layer: &mut EffectInstance,
+    report: &mut Report,
+) -> Result<()> {
     for (index, native) in parameters.into_iter().enumerate() {
         let number = graph.integer(native, &["ParameterID"], (index + 1) as i64)?;
         let mapped = match number {
@@ -215,7 +228,7 @@ pub(super) fn layer(
             Err(e) => return Err(e),
         }
     }
-    Ok(Some(layer))
+    Ok(())
 }
 
 /// Draw a text layer's letters for a sequence whose pixels have the aspect `par`. A text layer is
