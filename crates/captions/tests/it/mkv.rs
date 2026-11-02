@@ -1,8 +1,8 @@
 //! Text subtitle tracks as caption cues. Fixtures are built here with a minimal EBML writer (no
 //! committed media); one oracle test compares against ffmpeg when it is installed.
 
+use filmcraft_captions::mkv::{SubtitleError, SubtitleFormat, SubtitleTrack, list_subtitle_tracks, read_subtitle_cues};
 use filmcraft_captions::{Cue, srt};
-use filmcraft_matroska::{SubtitleError, SubtitleFormat, SubtitleTrack, list_subtitle_tracks, read_subtitle_cues};
 use filmcraft_time::{TICKS_PER_SECOND, Tick};
 
 const ID_EBML: &[u8] = &[0x1A, 0x45, 0xDF, 0xA3];

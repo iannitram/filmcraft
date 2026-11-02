@@ -3,7 +3,7 @@
 //! [`list_subtitle_tracks`] finds the text subtitle tracks of a Matroska or WebM file: TrackType 17
 //! with codec `S_TEXT/UTF8` (SubRip), `S_TEXT/WEBVTT`, `S_TEXT/ASS` or `S_TEXT/SSA`. Bitmap
 //! subtitles (PGS, VobSub) are not text and are left out. [`read_subtitle_cues`] reads one track as
-//! [`filmcraft_captions::Cue`]s.
+//! [`Cue`]s.
 //!
 //! Timing: a cue starts at its block timestamp (cluster `Timecode` plus the block offset, in
 //! `TimestampScale` ticks) and ends `BlockDuration` later. A block with no duration ends where the
@@ -12,8 +12,8 @@
 //! ASS and SSA blocks carry `ReadOrder,Layer,Style,Name,MarginL,MarginR,MarginV,Effect,Text`: only
 //! the text is kept, with `{...}` override tags removed and `\N` turned into a newline.
 
-use craft_media::matroska::{ByteSource, OpenOptions, Track, TrackKind, open, open_with};
-use filmcraft_captions::Cue;
+use crate::Cue;
+use filmcraft_matroska::{ByteSource, OpenOptions, Track, TrackKind, open, open_with};
 use filmcraft_time::{TICKS_PER_SECOND, Tick};
 
 /// End time, after its start, of a cue that has no duration and no following cue (2 s).
@@ -62,7 +62,7 @@ pub struct SubtitleTrack {
 #[derive(Debug, thiserror::Error)]
 pub enum SubtitleError {
     #[error("Matroska: {0}")]
-    Matroska(#[from] craft_media::matroska::Error),
+    Matroska(#[from] filmcraft_matroska::Error),
     #[error("no track with number {0}")]
     NoSuchTrack(u64),
     #[error("track {0} is not a text subtitle track (SubRip, WebVTT, ASS or SSA)")]

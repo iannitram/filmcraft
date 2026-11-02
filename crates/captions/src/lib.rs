@@ -20,6 +20,7 @@
 pub mod burn;
 pub mod cea608;
 pub mod mcc;
+pub mod mkv;
 pub mod scc;
 pub mod srt;
 pub mod stl;

@@ -3,7 +3,4 @@
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
-pub mod subtitles;
-
 pub use craft_media::matroska::*;
-pub use subtitles::{SubtitleError, SubtitleFormat, SubtitleResult, SubtitleTrack, list_subtitle_tracks, read_subtitle_cues};

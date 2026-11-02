@@ -1961,7 +1961,9 @@ name = "filmcraft-captions"
 version = "0.16.0"
 dependencies = [
  "filmcraft-color",
+ "filmcraft-matroska",
  "filmcraft-project",
+ "filmcraft-testkit",
  "filmcraft-text",
  "filmcraft-time",
  "proptest",
@@ -2287,11 +2289,8 @@ name = "filmcraft-matroska"
 version = "0.16.0"
 dependencies = [
  "craft-media",
- "filmcraft-captions",
  "filmcraft-testkit",
- "filmcraft-time",
  "serde_json",
- "thiserror 2.0.21",
 ]
 
 [[package]]
