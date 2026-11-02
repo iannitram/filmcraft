@@ -833,7 +833,7 @@ pub fn opener(name: &str, bytes: Arc<[u8]>) -> Option<Result<SharedSource, Media
 /// The grid starts at the first picture and steps by the nominal frame duration. A file is snapped
 /// only when every picture is less than a quarter of a frame from its own grid point and no two land
 /// on the same one: a frame that far off was placed there (variable frame rate), so a file with one
-/// such picture keeps all its times. A picture at most one unit off is left where it is: that can't
+/// such picture keeps all its times. A picture at most one unit early is left where it is: that can't
 /// be told from the timescale's rounding. Snapping keeps the samples' presentation order. Only the video samples move: the first picture, which the audio and
 /// `rebase_unedited_video` go by, is the grid's origin, and the clip's duration comes from the
 /// track header.
@@ -859,7 +859,12 @@ fn snap_to_frame_grid(file: &mut Mp4File, vtrack: Option<usize>) {
         if off_grid * 4 * step_den >= step_num {
             return None;
         }
-        Some((n, if off_grid <= 1 { pts } else { i64::try_from(at).ok()? }))
+        // A picture up to a unit early is the timescale's rounding of a point between two units
+        // (1501.5 units a frame at 59.94 fps over 90 kHz) and stays. One even a unit late moves
+        // onto its point: a request at the frame's exact start rounds to that point, and would
+        // miss a picture kept after it (millisecond stamps on a 90 kHz clock, 317 ms for 316.98).
+        let early = at - i128::from(pts);
+        Some((n, if (0..=1).contains(&early) { pts } else { i64::try_from(at).ok()? }))
     };
     let Some(snapped) = t.samples.iter().map(|s| snap(s.pts)).collect::<Option<Vec<_>>>() else { return };
     // Two pictures by one grid point: not a constant rate. Checked on the index, not the new time:

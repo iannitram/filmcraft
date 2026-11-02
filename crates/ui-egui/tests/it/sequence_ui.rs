@@ -489,7 +489,7 @@ fn closing_project_discards_palette_and_clip_color_drafts_and_native_sessions() 
     assert!(d.app().ui.palette_manager.is_none());
     assert_eq!(probe.drops.get(), 1);
     assert!(d.app().session.project.custom_colors.is_empty());
-    d.exec("file.openDemoProject", json!({}));
+    d.open_demo_project();
     let clip = d.app().session.active_sequence().unwrap().video_tracks[0].items[0].id;
     d.exec("timeline.select", json!({"clips":[clip.0]}));
     d.ok("ui.click", json!({"id":format!("timeline.clip.{}",clip.0),"button":"right"}));
@@ -651,7 +651,7 @@ fn custom_color_dialogs_do_not_follow_a_different_project_or_saved_ui_state() {
     d.right_marker(marker, false);
     d.click("timeline.markerMenu.properties");
     d.click("markerProperties.addColor");
-    d.exec("file.openDemoProject", json!({}));
+    d.open_demo_project();
     d.frames(2);
     assert!(d.app().ui.marker_properties.is_none());
     assert!(d.app().session.project.custom_colors.is_empty());
@@ -664,7 +664,7 @@ fn custom_color_dialogs_do_not_follow_a_different_project_or_saved_ui_state() {
     let saved_ui = serde_json::to_value(&d.app().ui).unwrap();
     assert!(saved_ui.get("custom_label_color").is_none());
     assert!(saved_ui.get("marker_properties").is_none());
-    d.exec("file.openDemoProject", json!({}));
+    d.open_demo_project();
     d.frames(2);
     assert!(d.app().ui.custom_label_color.is_none());
     assert!(d.app().session.project.custom_colors.is_empty());
@@ -946,7 +946,7 @@ fn native_marker_color_preview_cancel_and_undo_preserve_project_ownership() {
     d.right_marker(marker, false);
     d.click("timeline.markerMenu.properties");
     d.click("markerProperties.addColor");
-    d.exec("file.openDemoProject", json!({}));
+    d.open_demo_project();
     d.frames(3);
     assert_eq!(probe.drops.get(), 4, "switching projects releases the native picker");
     assert!(d.app().ui.marker_properties.is_none());
@@ -1085,6 +1085,17 @@ impl Driver {
     fn click(&mut self, id: &str) {
         self.ok("ui.click", json!({"id": id}));
         self.frames(2);
+    }
+
+    /// New ▸ Demo Project while a marker dialog is open. A project with unsaved changes asks
+    /// Save / Don't Save first (FX1), and that prompt waits behind the open marker dialog, so
+    /// answer it Don't Save here: the project is replaced as it would be after that click.
+    fn open_demo_project(&mut self) {
+        let r = self.exec("file.openDemoProject", json!({}));
+        if r.get("dialog").and_then(Value::as_str) == Some("openDemoProject") {
+            self.app().ui.clip_dialog = None;
+            self.app().session.execute("file.openDemoProject", json!({})).expect("demo project");
+        }
     }
 
     fn double_click(&mut self, id: &str) {

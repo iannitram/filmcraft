@@ -221,7 +221,9 @@ mod tests {
         assert_eq!(leb128(&[0x7F]), Ok((127, 1)));
         assert_eq!(leb128(&[0x80, 0x01]), Ok((128, 2)));
         assert!(matches!(leb128(&[0x80]), Err(Error::Truncated)));
-        assert_eq!(leb128(&[0x80; 8]), Ok((0, 8)));
+        // the longest form ends on its eighth byte; one still continued there is cut short (#2801)
+        assert_eq!(leb128(&[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00]), Ok((0, 8)));
+        assert!(matches!(leb128(&[0x80; 8]), Err(Error::Truncated)));
     }
 
     #[test]
