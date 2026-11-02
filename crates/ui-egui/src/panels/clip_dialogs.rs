@@ -751,7 +751,10 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
                 }
                 // a newer prompt (Quit asked while Close Project's dialog was open) is the one to
                 // finish or to show again
-                let newer = matches!(app.ui.clip_dialog.as_ref().map(|c| c.command.as_str()), Some("app.quit" | "file.closeProject" | "file.newProject" | "file.openDemoProject" | "file.open"));
+                let newer = matches!(
+                    app.ui.clip_dialog.as_ref().map(|c| c.command.as_str()),
+                    Some("app.quit" | "file.closeProject" | "file.newProject" | "file.openDemoProject" | "file.open")
+                );
                 let prompt = if newer { app.ui.clip_dialog.take().unwrap_or(prompt) } else { prompt };
                 let Some(path) = paths.into_iter().next() else {
                     // cancelled: the prompt again, unless another dialog is open now
