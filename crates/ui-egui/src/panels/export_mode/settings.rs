@@ -336,7 +336,7 @@ pub(super) fn settings_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: R
             ui.add_space(8.0);
             let s = &mut ex.settings;
             if s.has_video() && section(ui, &mut reg, &mut ex.open_sections, "video", tl!("Video"), &t) {
-                video_section(ui, &mut reg, s, &t, seq_w, seq_h, seq_par, seq_hdr);
+                video_section(ui, &mut reg, s, &t, (seq_w, seq_h), seq_par, seq_hdr);
             }
             if (s.has_audio()
                 || !s.has_video()
@@ -429,7 +429,8 @@ pub(super) fn settings_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: R
     reg.flush(app);
 }
 
-fn video_section(ui: &mut egui::Ui, reg: &mut Reg, s: &mut ExportSettings, t: &Tokens, seq_w: u32, seq_h: u32, seq_par: (u32, u32), seq_hdr: bool) {
+fn video_section(ui: &mut egui::Ui, reg: &mut Reg, s: &mut ExportSettings, t: &Tokens, seq_size: (u32, u32), seq_par: (u32, u32), seq_hdr: bool) {
+    let (seq_w, seq_h) = seq_size;
     // frame size
     let mut match_size = s.frame_size.is_none();
     row(ui, t, tl!("Frame Size"), |ui| {

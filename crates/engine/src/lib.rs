@@ -1472,7 +1472,7 @@ mod voiceover_tests;
 #[cfg(test)]
 mod work_area_tests;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod auto_save_dir_tests;
 #[cfg(test)]
 mod save_recovery_tests;
