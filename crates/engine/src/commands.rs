@@ -4021,6 +4021,30 @@ fn build() -> Vec<CommandSpec> {
             ))
         }),
         query!("project.inspect", "Inspect Project", "{}", |s, _| Ok(crate::commands::inspect_project(s))),
+        cmd!(
+            "ledger.setClass",
+            "Set Source Class",
+            [],
+            None,
+            r#"{"item":id?,"bin":binId?,"class":"mine|borrowedFootage|borrowedMusic|unknown"|null,"citation":str|null?}; exactly one target; null class inherits; omitted citation preserves"#,
+            always,
+            crate::ledger::set_class
+        ),
+        cmd!(
+            "ledger.setRule",
+            "Set Source Rule",
+            [],
+            None,
+            r#"{"folder":str,"kind":"folder|libraryIndex"?,"class":"mine|borrowedFootage|borrowedMusic|unknown"|null,"citation":str|null?}; libraryIndex defaults to borrowedFootage; null class removes; omitted citation preserves"#,
+            always,
+            crate::ledger::set_rule
+        ),
+        query!(
+            "ledger.inspectSources",
+            "Inspect Sources",
+            r#"{"item":id?}; effective labels, explicit overrides, bin labels and folder rules"#,
+            crate::ledger::inspect
+        ),
         query!("sequence.inspect", "Inspect Sequence", r#"{"item":id?}"#, |s, p| {
             let id = item_p(p, "item").or(s.state.active_sequence).ok_or(EngineError::NoSequence)?;
             let q = s.project.sequence(id).ok_or(EngineError::NoSequence)?;
