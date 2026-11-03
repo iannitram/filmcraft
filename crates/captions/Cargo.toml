@@ -14,8 +14,10 @@ filmcraft-time = { workspace = true }
 filmcraft-color = { workspace = true }
 filmcraft-project = { workspace = true }
 filmcraft-text = { workspace = true }
+filmcraft-matroska = { workspace = true }
 thiserror = { workspace = true }
 roxmltree = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+filmcraft-testkit = { workspace = true }

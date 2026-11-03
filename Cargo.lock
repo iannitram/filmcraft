@@ -1961,7 +1961,9 @@ name = "filmcraft-captions"
 version = "0.16.0"
 dependencies = [
  "filmcraft-color",
+ "filmcraft-matroska",
  "filmcraft-project",
+ "filmcraft-testkit",
  "filmcraft-text",
  "filmcraft-time",
  "proptest",
