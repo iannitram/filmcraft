@@ -250,4 +250,20 @@ mod tests {
     fn webvtt_crlf_framing() {
         assert_eq!(webvtt_cue_text("id\r\n00:01.000 --> 00:02.000 align:start\r\nHello\r\n"), "Hello");
     }
+
+    #[test]
+    fn webvtt_identifier_and_settings_both_present() {
+        assert_eq!(webvtt_cue_text("intro\n00:01.000 --> 00:02.000 align:start line:0\nHello"), "Hello");
+    }
+
+    #[test]
+    fn webvtt_arrow_text_after_timing_line_is_kept() {
+        assert_eq!(webvtt_cue_text("id\n00:01.000 --> 00:02.000\na --> b\nc"), "a --> b\nc");
+        assert_eq!(webvtt_cue_text("00:01.000 --> 00:02.000\n00:05.000 --> x"), "00:05.000 --> x");
+    }
+
+    #[test]
+    fn webvtt_multiline_crlf_text_after_framing() {
+        assert_eq!(webvtt_cue_text("id\r\n00:01.000 --> 00:02.000\r\nHello\r\nworld\r\n"), "Hello\nworld");
+    }
 }
