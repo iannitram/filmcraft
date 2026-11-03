@@ -132,8 +132,27 @@ fn payload_text(format: SubtitleFormat, data: &[u8]) -> String {
     let text = String::from_utf8_lossy(data);
     match format {
         SubtitleFormat::Ass | SubtitleFormat::Ssa => ass_plain_text(&text),
-        SubtitleFormat::SubRip | SubtitleFormat::WebVtt => text.trim_end_matches(['\r', '\n']).to_string(),
+        SubtitleFormat::SubRip => text.trim_end_matches(['\r', '\n']).to_string(),
+        SubtitleFormat::WebVtt => webvtt_cue_text(&text),
     }
+}
+
+/// The cue text of one WebVTT block payload. The block's timing comes from Matroska, so an
+/// optional cue identifier (the line just before the timing line) and the timing line itself
+/// (including its cue settings) are dropped. Payloads without a timing line in the first two
+/// lines are plain cue text and keep their interior line endings.
+fn webvtt_cue_text(payload: &str) -> String {
+    let lines: Vec<&str> = payload.lines().collect();
+    let timing = match (lines.first(), lines.get(1)) {
+        (Some(first), _) if first.contains("-->") => Some(0),
+        (Some(_), Some(second)) if second.contains("-->") => Some(1),
+        _ => None,
+    };
+    let body = match timing {
+        Some(index) => lines.get(index + 1..).unwrap_or_default().join("\n"),
+        None => payload.to_string(),
+    };
+    body.trim_end_matches(['\r', '\n']).to_string()
 }
 
 /// The plain text of one ASS/SSA block payload: the text after the eight leading fields, with
@@ -199,5 +218,36 @@ mod tests {
         assert_eq!(ns_to_tick(1_000_000_000), Tick(TICKS_PER_SECOND));
         assert_eq!(ns_to_tick(0), Tick(0));
         assert_eq!(ns_to_tick(-1_000_000_000), Tick(-TICKS_PER_SECOND));
+    }
+
+    #[test]
+    fn webvtt_drops_identifier_and_timing_line() {
+        assert_eq!(webvtt_cue_text("intro\n00:01.000 --> 00:02.000\nHello"), "Hello");
+    }
+
+    #[test]
+    fn webvtt_without_identifier_drops_timing_line() {
+        assert_eq!(webvtt_cue_text("00:01.000 --> 00:02.000\nHello\nworld"), "Hello\nworld");
+    }
+
+    #[test]
+    fn webvtt_timing_line_with_settings_is_dropped() {
+        assert_eq!(webvtt_cue_text("00:01.000 --> 00:02.000 align:start line:0\nHello"), "Hello");
+    }
+
+    #[test]
+    fn webvtt_numeric_text_line_is_kept() {
+        assert_eq!(webvtt_cue_text("1\n00:01.000 --> 00:02.000\n42"), "42");
+        assert_eq!(webvtt_cue_text("42\nhello"), "42\nhello");
+    }
+
+    #[test]
+    fn webvtt_plain_text_is_unchanged() {
+        assert_eq!(webvtt_cue_text("Hello\r\nworld\r\n"), "Hello\r\nworld");
+    }
+
+    #[test]
+    fn webvtt_crlf_framing() {
+        assert_eq!(webvtt_cue_text("id\r\n00:01.000 --> 00:02.000 align:start\r\nHello\r\n"), "Hello");
     }
 }
