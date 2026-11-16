@@ -78,7 +78,7 @@ fn text_format(t: &Track) -> Option<SubtitleFormat> {
 /// Lists the text subtitle tracks of a Matroska or WebM file, in file order. A file without one
 /// gives an empty list.
 pub fn list_subtitle_tracks<S: ByteSource>(src: S) -> SubtitleResult<Vec<SubtitleTrack>> {
-    let file = open_with(&src, &OpenOptions { index: false, verify_crc: false })?;
+    let file = open_with(&src, &OpenOptions { index: false, verify_crc: false, index_limit: None })?;
     Ok(file
         .tracks
         .iter()

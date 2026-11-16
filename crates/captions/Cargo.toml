@@ -14,10 +14,9 @@ filmcraft-time = { workspace = true }
 filmcraft-color = { workspace = true }
 filmcraft-project = { workspace = true }
 filmcraft-text = { workspace = true }
-filmcraft-matroska = { workspace = true }
+craft-captions = { workspace = true }
+filmcraft-matroska = { workspace = true } # ours (Matroska subtitle tracks)
 thiserror = { workspace = true }
-roxmltree = { workspace = true }
 
 [dev-dependencies]
-proptest = { workspace = true }
 filmcraft-testkit = { workspace = true }

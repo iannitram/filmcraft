@@ -475,6 +475,7 @@ pub fn commands() -> Vec<crate::commands::CommandSpec> {
             enabled: always,
             run: add,
             journal: true,
+            named: crate::commands::NamedKeys::NONE,
         },
         CommandSpec {
             id: "link.openInEffectCraft",
@@ -488,6 +489,7 @@ pub fn commands() -> Vec<crate::commands::CommandSpec> {
                 open_in_effectcraft(s, id)
             },
             journal: false,
+            named: crate::commands::NamedKeys::NONE,
         },
         CommandSpec {
             id: "link.refreshEffectCraft",
@@ -498,6 +500,7 @@ pub fn commands() -> Vec<crate::commands::CommandSpec> {
             enabled: always,
             run: refresh,
             journal: true,
+            named: crate::commands::NamedKeys::NONE,
         },
     ]
 }

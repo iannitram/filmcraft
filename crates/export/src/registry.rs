@@ -41,7 +41,7 @@ pub trait VideoEncoder: Send {
         None
     }
     /// First-pass statistics of a two-pass encode (H.264).
-    fn pass_stats(&self) -> Option<filmcraft_h264enc::PassStats> {
+    fn pass_stats(&self) -> Option<craft_video::h264::PassStats> {
         None
     }
     /// Work on a rendered picture that needs nothing of the encoder's state (H.264: the colour
@@ -51,9 +51,15 @@ pub trait VideoEncoder: Send {
     fn prepare_ahead(&self) -> Option<PrepareAhead> {
         None
     }
-    /// ours (self-logging): who encodes, for the export's `decision:` line.
+    /// The hardware encoder doing the work ("NVENC", "VideoToolbox"), `None` for FilmCraft's own
+    /// software encoders: what the export's [`crate::Report::encoder`] names.
+    fn hardware(&self) -> Option<&'static str> {
+        None
+    }
+    /// ours (self-logging): who encodes, for the export's `decision:` line: the hardware encoder,
+    /// else [`BUILT_IN_ENCODER`].
     fn encoder_name(&self) -> &'static str {
-        BUILT_IN_ENCODER
+        self.hardware().unwrap_or(BUILT_IN_ENCODER)
     }
 }
 
@@ -124,6 +130,11 @@ pub trait FrameRenderer: Send {
         opts: filmcraft_render::RenderOptions,
         sources: &dyn SourceProvider,
     ) -> Option<filmcraft_render::Image>;
+
+    /// What the renderer's device runs. The export plans with it before taking a renderer
+    /// ([`filmcraft_render::plan::is_cpu_frame`]), so a frame the device can't composite renders
+    /// on the export's own thread instead of on the CPU inside the renderer.
+    fn caps(&self) -> filmcraft_render::plan::DeviceCaps;
 }
 
 /// Builds the frame renderer for one export, or `None` when this host cannot (no adapter).
