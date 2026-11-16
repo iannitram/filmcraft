@@ -475,6 +475,7 @@ pub fn commands() -> Vec<crate::commands::CommandSpec> {
             enabled: always,
             run: add,
             journal: true,
+            named: crate::commands::NamedKeys::NONE,
         },
         CommandSpec {
             id: "link.openInEffectCraft",
@@ -488,6 +489,7 @@ pub fn commands() -> Vec<crate::commands::CommandSpec> {
                 open_in_effectcraft(s, id)
             },
             journal: false,
+            named: crate::commands::NamedKeys::NONE,
         },
         CommandSpec {
             id: "link.refreshEffectCraft",
@@ -498,6 +500,7 @@ pub fn commands() -> Vec<crate::commands::CommandSpec> {
             enabled: always,
             run: refresh,
             journal: true,
+            named: crate::commands::NamedKeys::NONE,
         },
     ]
 }
@@ -522,7 +525,9 @@ mod tests {
         assert_eq!(relative_to(r"J:\Shows\Ep1\Titles\t.ecproj", r"J:\Shows\Ep1").as_deref(), Some("Titles/t.ecproj"));
         assert_eq!(relative_to(r"D:\t.ecproj", r"C:\Shows"), None);
         assert_eq!(relative_to("/other/t.ecproj", "/shows/ep1"), None);
-        assert_eq!(join_relative("../titles/t.ecproj", "/moved/ep1/cut"), "/moved/ep1/titles/t.ecproj");
+        // built per component, so the expected separators are this platform's (`\` on Windows)
+        let moved = PathBuf::from("/moved/ep1").join("titles").join("t.ecproj").to_string_lossy().into_owned();
+        assert_eq!(join_relative("../titles/t.ecproj", "/moved/ep1/cut"), moved);
         // the stored path gone, the relative one found beside the moved FilmCraft project
         let dir = std::env::temp_dir().join(format!("fc-link-rel-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("Show/Titles")).unwrap();

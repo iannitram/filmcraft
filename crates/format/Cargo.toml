@@ -10,12 +10,12 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+craft-fcproj-format = { workspace = true }
 filmcraft-project = { workspace = true }
 filmcraft-media = { workspace = true }
 log = { workspace = true }
-serde = { workspace = true }
+serde = { workspace = true } # ours: saved_dir beside the envelope
 serde_json = { workspace = true }
-thiserror = { workspace = true }
 chrono = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

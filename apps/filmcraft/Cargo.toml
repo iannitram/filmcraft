@@ -18,6 +18,7 @@ whisper = ["filmcraft-engine/whisper", "filmcraft-engine/speech-download"]
 neural-voices = ["filmcraft-engine/neural-voices"]
 
 [dependencies]
+craft-control-protocol = { workspace = true }
 craft-log = { path = "../../crates/craft-log" } # ours (self-logging)
 filmcraft-engine = { workspace = true }
 filmcraft-export = { workspace = true }
@@ -31,7 +32,6 @@ egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "clipboard", "wayland", "x11"] }
 serde_json = { workspace = true }
 # Constant-time comparison of control-channel credentials.
-subtle = "2.6"
 log = { workspace = true }
 rfd = { workspace = true }
 cpal = "0.16"
@@ -41,11 +41,12 @@ chrono = { workspace = true, features = ["clock"] }
 sys-locale = "0.3"
 # Help menu / About / Discord links in the system browser (MIT; as PhotoCraft).
 open = "5"
+# graphics/probe.rs: the graphics test start waits for wgpu's adapter and device; graphics.rs's
+# tests enumerate the real adapters with it too (MIT OR Apache-2.0).
+pollster = "1"
 
 [dev-dependencies]
 glob = "0.3"
-# graphics.rs: enumerate the real adapters in a test.
-pollster = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = "0.21"
@@ -71,3 +72,6 @@ winresource = "0.1"
 
 [target.'cfg(windows)'.dependencies]
 craft-update = { workspace = true }
+# graphics/probe.rs: the display drivers' names and versions, so a driver update tests the
+# graphics start again (MIT).
+winreg = "0.55"

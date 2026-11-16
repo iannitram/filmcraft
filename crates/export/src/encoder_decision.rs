@@ -43,7 +43,7 @@ mod tests {
     fn choosing_an_encoder_writes_one_decision_line() {
         let _log = craft_log::testing::capture();
         let s = ExportSettings { format: Format::H264, hardware_encoding: HardwareEncoding::Off, ..Default::default() };
-        let enc = crate::job::make_venc(&s, 64, 48, filmcraft_time::FrameRate::new(30, 1)).expect("the built-in H.264 encoder");
+        let enc = crate::job::make_venc(&s, 64, 48, filmcraft_time::FrameRate::new(30, 1)).expect("the built-in H.264 encoder").0;
         assert_eq!(enc.encoder_name(), crate::BUILT_IN_ENCODER);
         let lines: Vec<String> = craft_log::testing::captured().into_iter().filter(|l| l.contains("decision: export:")).collect();
         assert_eq!(lines.len(), 1, "{lines:?}");
@@ -56,7 +56,7 @@ mod tests {
         // This crate registers no hardware factory, as on a machine without one.
         let _log = craft_log::testing::capture();
         let s = ExportSettings { format: Format::H264, hardware_encoding: HardwareEncoding::Auto, ..Default::default() };
-        let enc = crate::job::make_venc(&s, 64, 48, filmcraft_time::FrameRate::new(30, 1)).expect("the built-in H.264 encoder");
+        let enc = crate::job::make_venc(&s, 64, 48, filmcraft_time::FrameRate::new(30, 1)).expect("the built-in H.264 encoder").0;
         assert_eq!(enc.encoder_name(), crate::BUILT_IN_ENCODER);
         let lines: Vec<String> = craft_log::testing::captured().into_iter().filter(|l| l.contains("decision: export:")).collect();
         assert!(lines.iter().any(|l| l.contains("H.264 encoded by built-in (software) (no hardware H.264 encoder on this machine)")), "{lines:?}");

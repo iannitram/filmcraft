@@ -840,6 +840,7 @@ pub fn commands() -> Vec<CommandSpec> {
                 Ok(json!({"missing": list}))
             },
             journal: false,
+            named: crate::commands::NamedKeys::NONE,
         },
         CommandSpec {
             id: "media.status",
@@ -856,6 +857,7 @@ pub fn commands() -> Vec<CommandSpec> {
                 Ok(Value::Array(ids.into_iter().filter_map(|i| status_json(s, i)).collect()))
             },
             journal: false,
+            named: crate::commands::NamedKeys::NONE,
         },
         CommandSpec {
             id: "media.linkMedia",
@@ -870,6 +872,7 @@ pub fn commands() -> Vec<CommandSpec> {
                 Ok(json!({"missing": list}))
             },
             journal: false,
+            named: crate::commands::NamedKeys::NONE,
         },
         CommandSpec {
             id: "media.relink",
@@ -880,6 +883,7 @@ pub fn commands() -> Vec<CommandSpec> {
             enabled: always,
             run: relink,
             journal: true,
+            named: crate::commands::NamedKeys::NONE,
         },
         CommandSpec {
             id: "media.refreshChanged",
@@ -890,6 +894,7 @@ pub fn commands() -> Vec<CommandSpec> {
             enabled: always,
             run: crate::media_watch::refresh_changed,
             journal: true,
+            named: crate::commands::NamedKeys::NONE,
         },
         CommandSpec {
             id: "media.replaceFootage",
@@ -905,6 +910,7 @@ pub fn commands() -> Vec<CommandSpec> {
                 relink(s, &q)
             },
             journal: true,
+            named: crate::commands::NamedKeys::NONE,
         },
         CommandSpec {
             id: "media.autoRelink",
@@ -915,6 +921,7 @@ pub fn commands() -> Vec<CommandSpec> {
             enabled: always,
             run: auto_relink,
             journal: true,
+            named: crate::commands::NamedKeys::NONE,
         },
         CommandSpec {
             id: "media.search",
@@ -925,6 +932,7 @@ pub fn commands() -> Vec<CommandSpec> {
             enabled: always,
             run: |s, p| search(s, p),
             journal: false,
+            named: crate::commands::NamedKeys::NONE,
         },
         CommandSpec {
             id: "media.relinkSuggest",
@@ -935,6 +943,7 @@ pub fn commands() -> Vec<CommandSpec> {
             enabled: always,
             run: |s, p| relink_suggest(s, p),
             journal: false,
+            named: crate::commands::NamedKeys::NONE,
         },
         CommandSpec {
             id: "media.makeOffline",
@@ -952,6 +961,7 @@ pub fn commands() -> Vec<CommandSpec> {
             },
             run: make_offline,
             journal: true,
+            named: crate::commands::NamedKeys::NONE,
         },
         CommandSpec {
             id: "media.offlineAll",
@@ -962,6 +972,7 @@ pub fn commands() -> Vec<CommandSpec> {
             enabled: always,
             run: offline_all,
             journal: true,
+            named: crate::commands::NamedKeys::NONE,
         },
     ]
 }
