@@ -18,3 +18,5 @@ Upstream's `AGENTS.md` and `CLAUDE.md` are upstream's: read them and follow them
 - **Logs first:** when anything fails, read the app's own log (`<data folder>/Logs/filmcraft.log`; `FILMCRAFT_DATA_DIR` sets the folder) and quote it in the issue, or say it was silent.
 - **Tests:** release profile with `FILMCRAFT_NO_HARDWARE=1`; keep to fixed `-p` sets (a new mix rebuilds many crates). NVENC tests run only on the NVIDIA PC. The full test notes are in issue #66.
 - **Starting `filmcraft.exe --help` on old Windows builds starts the app;** use `filmcraft-cli` for anything outside a window test.
+
+**Upstream and peers:** see `PEERS.md` at the repo root. When I say "upstream", I mean the repo in its Upstream section; reuse a peer's code only as that file allows.
